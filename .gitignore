@@ -1,10 +1,55 @@
 __pycache__/
 *.py[cod]
+.Python
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.tox/
+.nox/
+
+# Virtual environments
 .venv/
 venv/
+env/
+
+# Local secrets and environment overrides
 .env
+.env.*
+!.env.example
+
+# Local databases and SQLite sidecar files
 *.db
 *.sqlite
 *.sqlite3
+*.db-journal
+*.sqlite-journal
+*.sqlite3-journal
+
+# Test and coverage output
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Packaging/build output
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+
+# Editor and operating-system metadata
+.vscode/
+.idea/
 .DS_Store
+Thumbs.db
+Desktop.ini

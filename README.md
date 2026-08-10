@@ -1,6 +1,8 @@
 # CEM Master Backend
 
-FastAPI backend for the public CEM Master discovery website. Phase 1 exposes a database-backed catalogue of public monitoring spots as GeoJSON.
+FastAPI backend for the public CEM Master discovery website. It exposes a
+database-backed catalogue of canonical physical monitoring spots, searchable
+bird metadata, and bioacoustic analysis summaries used by the map dashboard.
 
 ## Local Setup
 
@@ -28,9 +30,19 @@ For Render PostgreSQL, set `DATABASE_URL` to the managed database URL.
 
 - `GET /health`
 - `GET /api/v1/spots`
+- `GET /api/v1/spots?species_id=<id>`
+- `GET /api/v1/spots/{spot_id}`
 - `POST /api/v1/spots`
+- `GET /api/v1/species?search=<common-or-scientific-name>`
+- `GET /api/v1/species/{species_id}`
+- `GET /api/v1/spots/{spot_id}/summary`
+- `GET /api/v1/spots/{spot_id}/species/{species_id}`
 
 `GET /api/v1/spots` returns a GeoJSON `FeatureCollection` with point coordinates in `[longitude, latitude]` order.
+
+Latitude and longitude identify a canonical physical spot. Publishing another
+project spot at the same exact coordinates links that source to the existing
+spot instead of creating an overlapping map marker.
 
 ## Seed Sample Spots
 
@@ -40,7 +52,8 @@ With the virtualenv active:
 python scripts/seed_spots.py
 ```
 
-Or insert a spot manually:
+The seed command also creates representative species and analysis summaries so
+the dashboard can be exercised locally. Or insert a spot manually:
 
 ```bash
 curl -X POST http://127.0.0.1:8001/api/v1/spots \

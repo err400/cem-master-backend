@@ -70,3 +70,35 @@ def test_blank_required_fields_rejected(client):
     response = client.post("/api/v1/spots", json=sample_spot(name="   "))
 
     assert response.status_code == 422
+
+
+def test_same_coordinates_merge_into_one_canonical_spot(client):
+    assert client.post("/api/v1/spots", json=sample_spot()).status_code == 201
+    second_source = sample_spot(
+        source_project_id="second-project",
+        source_spot_id="different-source-id",
+        name="Same physical location",
+    )
+
+    assert client.post("/api/v1/spots", json=second_source).status_code == 201
+    data = client.get("/api/v1/spots").json()
+
+    assert len(data["features"]) == 1
+    assert data["features"][0]["properties"]["source_count"] == 2
+
+
+def test_spot_summary_has_safe_defaults(client):
+    assert client.post("/api/v1/spots", json=sample_spot()).status_code == 201
+
+    response = client.get("/api/v1/spots/1/summary")
+
+    assert response.status_code == 200
+    assert response.json()["summary"]["species_richness"] == 0
+    assert response.json()["summary"]["acoustic_indices"] == {}
+
+
+def test_species_search_is_empty_before_ingestion(client):
+    response = client.get("/api/v1/species", params={"search": "peafowl"})
+
+    assert response.status_code == 200
+    assert response.json() == {"items": []}

@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.database import init_db
-from app.routes import spots
+from app.routes import dashboard, spots
 
 settings = get_settings()
 
@@ -34,3 +34,4 @@ def health() -> dict[str, str]:
 
 
 app.include_router(spots.router)
+app.include_router(dashboard.router)
