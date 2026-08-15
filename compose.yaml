@@ -6,13 +6,12 @@ services:
     ports:
       - "${BACKEND_PORT:-8001}:8001"
     environment:
-      DATABASE_URL: "${BACKEND_DATABASE_URL:-sqlite:////data/cem_master.db}"
+      DATABASE_URL: "${DATABASE_URL:?Set DATABASE_URL to the cem-database PostgreSQL URL}"
       CORS_ORIGINS: "${BACKEND_CORS_ORIGINS:-http://localhost:8000,http://127.0.0.1:8000}"
       CEM_MASTER_API_KEY: "${BACKEND_API_KEY:-}"
     volumes:
       - ./app:/app/app:ro
       - ./scripts:/app/scripts:ro
-      - backend_data:/data
     command:
       - uvicorn
       - app.main:app
@@ -23,8 +22,11 @@ services:
       - --reload
       - --reload-dir
       - /app/app
+    networks:
+      - cem-network
     restart: unless-stopped
 
-volumes:
-  backend_data:
-    name: cem_master_backend_data
+networks:
+  cem-network:
+    external: true
+    name: cem_master_network

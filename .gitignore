@@ -18,14 +18,6 @@ env/
 .env.*
 !.env.example
 
-# Local databases and SQLite sidecar files
-*.db
-*.sqlite
-*.sqlite3
-*.db-journal
-*.sqlite-journal
-*.sqlite3-journal
-
 # Test and coverage output
 .coverage
 .coverage.*

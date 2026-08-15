@@ -5,7 +5,17 @@ from functools import lru_cache
 class Settings:
     def __init__(self) -> None:
         self.app_name = "CEM Master Backend"
-        self.database_url = os.getenv("DATABASE_URL", "sqlite:///./cem_master.db")
+        self.database_url = os.getenv("DATABASE_URL", "").strip()
+        if not self.database_url:
+            raise RuntimeError(
+                "DATABASE_URL is required; point it at the PostgreSQL service named cem-database"
+            )
+        if self.database_url.startswith("postgresql://"):
+            self.database_url = self.database_url.replace(
+                "postgresql://", "postgresql+psycopg://", 1
+            )
+        if not self.database_url.startswith("postgresql+psycopg://"):
+            raise RuntimeError("CEM Master requires a PostgreSQL DATABASE_URL")
         self.cors_origins = self._parse_cors_origins(
             os.getenv(
                 "CORS_ORIGINS",

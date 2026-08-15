@@ -1,6 +1,7 @@
 from datetime import date, datetime, timezone
 
-from sqlalchemy import JSON, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -54,8 +55,11 @@ class Species(Base):
     iucn_category: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
     image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     image_attribution: Mapped[str | None] = mapped_column(Text, nullable=True)
-    taxonomy: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    network_metrics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    migration_class: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    activity_hours: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    seasonality: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    taxonomy: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    network_metrics: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
     )
@@ -65,13 +69,15 @@ class SpotSummary(Base):
     __tablename__ = "spot_summaries"
 
     spot_id: Mapped[int] = mapped_column(ForeignKey("spots.id", ondelete="CASCADE"), primary_key=True)
+    recording_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     species_richness: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     total_detections: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    recording_days: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    active_days: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    job_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     first_recording_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     last_recording_date: Mapped[date | None] = mapped_column(Date, nullable=True)
-    acoustic_indices: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    analysis_assets: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    acoustic_indices: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    analysis_assets: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
     )
@@ -81,22 +87,27 @@ class SpotSpeciesSummary(Base):
     __tablename__ = "spot_species_summaries"
     __table_args__ = (
         UniqueConstraint("spot_id", "species_id", name="uq_spot_species_summary"),
+        Index("ix_spot_species_activity", "spot_id", "detection_count"),
+        Index("ix_species_spot_activity", "species_id", "detection_count"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     spot_id: Mapped[int] = mapped_column(ForeignKey("spots.id", ondelete="CASCADE"), index=True)
     species_id: Mapped[int] = mapped_column(ForeignKey("species.id", ondelete="CASCADE"), index=True)
     detection_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    recording_days: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    active_days: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    activity_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    migration_class: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     average_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     maximum_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     first_detection_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     last_detection_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     activity_regularity: Mapped[float | None] = mapped_column(Float, nullable=True)
-    hourly_counts: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    daily_counts: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    analysis_metrics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    analysis_assets: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    hourly_counts: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    daily_counts: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    monthly_counts: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    analysis_metrics: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    analysis_assets: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
     )
@@ -110,6 +121,7 @@ class SpotSpeciesDaily(Base):
         UniqueConstraint(
             "spot_id", "species_id", "observation_date", name="uq_spot_species_daily"
         ),
+        Index("ix_species_date_spot", "species_id", "observation_date", "spot_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -139,4 +151,25 @@ class AnalysisJob(Base):
     output_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    job_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    job_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+
+class SpotEnvironmentDaily(Base):
+    """Daily solar and weather measurements used by activity correlations."""
+
+    __tablename__ = "spot_environment_daily"
+    __table_args__ = (
+        UniqueConstraint("spot_id", "observation_date", name="uq_spot_environment_daily"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    spot_id: Mapped[int] = mapped_column(ForeignKey("spots.id", ondelete="CASCADE"), index=True)
+    observation_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    sunrise_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sunset_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rainfall_mm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    temperature_min_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    temperature_max_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    temperature_mean_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    humidity_mean: Mapped[float | None] = mapped_column(Float, nullable=True)
+    severe_weather: Mapped[bool | None] = mapped_column(nullable=True)

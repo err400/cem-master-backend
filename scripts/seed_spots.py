@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.database import SessionLocal, init_db
+from app.database import SessionLocal
 from app.models import (
     AnalysisJob,
     Species,
@@ -58,6 +58,9 @@ SAMPLE_SPECIES = [
         "common_name": "Indian Peafowl",
         "scientific_name": "Pavo cristatus",
         "iucn_category": "Least Concern",
+        "migration_class": "resident",
+        "activity_hours": "05:00–09:00, 16:00–19:00",
+        "seasonality": "Year-round",
         "network_metrics": {
             "habitat_affinity": 0.67,
             "migration": "Resident",
@@ -70,6 +73,9 @@ SAMPLE_SPECIES = [
         "common_name": "Red-whiskered Bulbul",
         "scientific_name": "Pycnonotus jocosus",
         "iucn_category": "Least Concern",
+        "migration_class": "resident",
+        "activity_hours": "05:00–10:00",
+        "seasonality": "Year-round",
         "network_metrics": {
             "habitat_affinity": 0.54,
             "migration": "Resident",
@@ -82,6 +88,9 @@ SAMPLE_SPECIES = [
         "common_name": "Hume's Warbler",
         "scientific_name": "Phylloscopus humei",
         "iucn_category": "Least Concern",
+        "migration_class": "migratory",
+        "activity_hours": "06:00–10:00",
+        "seasonality": "Winter peak",
         "network_metrics": {
             "habitat_affinity": 0.71,
             "migration": "Migratory",
@@ -95,6 +104,9 @@ SAMPLE_SPECIES = [
         "common_name": "Common Tailorbird",
         "scientific_name": "Orthotomus sutorius",
         "iucn_category": "Least Concern",
+        "migration_class": "resident",
+        "activity_hours": "05:00–09:00",
+        "seasonality": "Year-round",
         "network_metrics": {
             "habitat_affinity": 0.45,
             "migration": "Resident",
@@ -107,6 +119,9 @@ SAMPLE_SPECIES = [
         "common_name": "Egyptian Vulture",
         "scientific_name": "Neophron percnopterus",
         "iucn_category": "Endangered",
+        "migration_class": "partial_migrant",
+        "activity_hours": "08:00–16:00",
+        "seasonality": "Winter increase",
         "network_metrics": {
             "habitat_affinity": 0.36,
             "migration": "Partially migratory",
@@ -174,7 +189,6 @@ def analysis_assets(spot_id: str) -> list[dict[str, str]]:
 
 
 def main() -> None:
-    init_db()
     created_spots = 0
     with SessionLocal() as db:
         spots_by_source: dict[str, Spot] = {}
@@ -216,6 +230,9 @@ def main() -> None:
             else:
                 species.common_name = species_data["common_name"]
                 species.iucn_category = species_data["iucn_category"]
+                species.migration_class = species_data["migration_class"]
+                species.activity_hours = species_data["activity_hours"]
+                species.seasonality = species_data["seasonality"]
                 species.network_metrics = species_data["network_metrics"]
             species_by_name[species.common_name] = species
 
@@ -226,9 +243,11 @@ def main() -> None:
         for source_spot_id, spot in spots_by_source.items():
             local_associations = associations_by_spot[source_spot_id]
             values = {
+                "recording_count": 900 + (int(source_spot_id[-1]) * 125),
                 "species_richness": len(local_associations),
                 "total_detections": sum(item[2] for item in local_associations),
-                "recording_days": 72 + (int(source_spot_id[-1]) * 8),
+                "active_days": 72 + (int(source_spot_id[-1]) * 8),
+                "job_count": len(local_associations),
                 "first_recording_date": DAILY_DATES[0],
                 "last_recording_date": DAILY_DATES[-1],
                 "acoustic_indices": ACOUSTIC_INDICES[source_spot_id],
@@ -266,13 +285,26 @@ def main() -> None:
             ]
             values = {
                 "detection_count": count,
-                "recording_days": days,
+                "active_days": days,
+                "activity_rank": 1 + sum(
+                    1
+                    for association in associations_by_spot[source_spot_id]
+                    if association[2] > count
+                ),
+                "migration_class": species.migration_class,
                 "average_confidence": avg_conf,
                 "maximum_confidence": max_conf,
                 "first_detection_date": DAILY_DATES[0],
                 "last_detection_date": DAILY_DATES[-1],
                 "activity_regularity": regularity,
                 "hourly_counts": hourly,
+                "monthly_counts": [
+                    {"month": "2025-05", "count": round(count * 0.12)},
+                    {"month": "2025-08", "count": round(count * 0.19)},
+                    {"month": "2025-12", "count": round(count * 0.27)},
+                    {"month": "2026-02", "count": round(count * 0.23)},
+                    {"month": "2026-05", "count": round(count * 0.19)},
+                ],
                 "analysis_metrics": metrics,
                 "analysis_assets": species_assets,
             }

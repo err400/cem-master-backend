@@ -10,6 +10,7 @@ from app.models import (
     AnalysisJob,
     Species,
     Spot,
+    SpotEnvironmentDaily,
     SpotSource,
     SpotSpeciesDaily,
     SpotSpeciesSummary,
@@ -21,6 +22,13 @@ router = APIRouter(prefix="/api/v1", tags=["dashboard"])
 
 
 def species_to_dict(species: Species) -> dict[str, Any]:
+    metrics = dict(species.network_metrics or {})
+    if species.migration_class:
+        metrics.setdefault("migration", species.migration_class)
+    if species.activity_hours:
+        metrics.setdefault("activity_hours", species.activity_hours)
+    if species.seasonality:
+        metrics.setdefault("seasonality", species.seasonality)
     return {
         "id": species.id,
         "common_name": species.common_name,
@@ -28,14 +36,18 @@ def species_to_dict(species: Species) -> dict[str, Any]:
         "iucn_category": species.iucn_category,
         "image_url": species.image_url,
         "image_attribution": species.image_attribution,
+        "migration_class": species.migration_class,
+        "activity_hours": species.activity_hours,
+        "seasonality": species.seasonality,
         "taxonomy": species.taxonomy or {},
-        "network_metrics": species.network_metrics or {},
+        "network_metrics": metrics,
     }
 
 
 @router.get("/species")
 def list_species(
     search: str | None = Query(default=None, max_length=220),
+    migration_class: str | None = Query(default=None, max_length=40),
     limit: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
@@ -47,6 +59,10 @@ def list_species(
                 Species.common_name.ilike(pattern),
                 Species.scientific_name.ilike(pattern),
             )
+        )
+    if migration_class and migration_class.strip():
+        stmt = stmt.where(
+            func.lower(Species.migration_class) == migration_class.strip().lower()
         )
     species = db.scalars(stmt.order_by(Species.common_name).limit(limit)).all()
     return {"items": [species_to_dict(item) for item in species]}
@@ -86,6 +102,9 @@ def get_spot_summary(spot_id: int, db: Session = Depends(get_db)) -> dict[str, A
     threatened_richness = sum(
         1 for _, species in inventory_rows if species.iucn_category in threatened_categories
     )
+    job_count = db.scalar(
+        select(func.count()).select_from(AnalysisJob).where(AnalysisJob.spot_id == spot_id)
+    ) or 0
 
     return {
         "spot": {
@@ -100,7 +119,11 @@ def get_spot_summary(spot_id: int, db: Session = Depends(get_db)) -> dict[str, A
             "species_richness": summary.species_richness if summary else len(inventory_rows),
             "threatened_species_richness": threatened_richness,
             "total_detections": summary.total_detections if summary else sum(row.detection_count for row, _ in inventory_rows),
-            "recording_days": summary.recording_days if summary else 0,
+            "recording_count": summary.recording_count if summary else 0,
+            "active_days": summary.active_days if summary else 0,
+            # Kept for the current frontend while it migrates to active_days.
+            "recording_days": summary.active_days if summary else 0,
+            "job_count": job_count,
             "first_recording_date": summary.first_recording_date if summary else None,
             "last_recording_date": summary.last_recording_date if summary else None,
             "acoustic_indices": summary.acoustic_indices if summary else {},
@@ -122,9 +145,12 @@ def get_spot_summary(spot_id: int, db: Session = Depends(get_db)) -> dict[str, A
                 "scientific_name": species.scientific_name,
                 "iucn_category": species.iucn_category,
                 "detection_count": item.detection_count,
-                "active_days": item.recording_days,
+                "active_days": item.active_days,
+                "activity_rank": item.activity_rank,
+                "migration_class": item.migration_class,
                 "first_occurrence": item.first_detection_date,
                 "last_occurrence": item.last_detection_date,
+                "monthly_counts": item.monthly_counts or [],
             }
             for item, species in inventory_rows
         ],
@@ -166,7 +192,7 @@ def get_spot_species_summary(
         raise HTTPException(status_code=404, detail="Species has no observations at this spot")
 
     detection_count = item.detection_count
-    recording_days = item.recording_days
+    active_days = item.active_days
     first_detection_date = item.first_detection_date
     last_detection_date = item.last_detection_date
     daily_counts = item.daily_counts or []
@@ -184,7 +210,7 @@ def get_spot_species_summary(
         if not daily_rows:
             raise HTTPException(status_code=404, detail="No detections in the selected date range")
         detection_count = sum(row.detection_count for row in daily_rows)
-        recording_days = len(daily_rows)
+        active_days = len(daily_rows)
         first_detection_date = daily_rows[0].observation_date
         last_detection_date = daily_rows[-1].observation_date
         daily_counts = [
@@ -209,7 +235,11 @@ def get_spot_species_summary(
         "species": species_to_dict(species),
         "observation": {
             "detection_count": detection_count,
-            "recording_days": recording_days,
+            "active_days": active_days,
+            # Kept for the current frontend while it migrates to active_days.
+            "recording_days": active_days,
+            "activity_rank": item.activity_rank,
+            "migration_class": item.migration_class,
             "average_confidence": item.average_confidence,
             "maximum_confidence": item.maximum_confidence,
             "first_detection_date": first_detection_date,
@@ -217,6 +247,7 @@ def get_spot_species_summary(
             "activity_regularity": item.activity_regularity,
             "hourly_counts": item.hourly_counts or [],
             "daily_counts": daily_counts,
+            "monthly_counts": item.monthly_counts or [],
             "analysis_metrics": item.analysis_metrics or {},
             "analysis_assets": item.analysis_assets or [],
         },
@@ -233,6 +264,43 @@ def get_spot_species_summary(
                 "completed_at": job.completed_at,
             }
             for job in jobs
+        ],
+    }
+
+
+@router.get("/spots/{spot_id}/environment")
+def get_spot_environment(
+    spot_id: int,
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    if start_date and end_date and start_date > end_date:
+        raise HTTPException(status_code=422, detail="start_date must be on or before end_date")
+    if db.get(Spot, spot_id) is None:
+        raise HTTPException(status_code=404, detail="Spot not found")
+
+    stmt = select(SpotEnvironmentDaily).where(SpotEnvironmentDaily.spot_id == spot_id)
+    if start_date:
+        stmt = stmt.where(SpotEnvironmentDaily.observation_date >= start_date)
+    if end_date:
+        stmt = stmt.where(SpotEnvironmentDaily.observation_date <= end_date)
+    rows = db.scalars(stmt.order_by(SpotEnvironmentDaily.observation_date)).all()
+    return {
+        "spot_id": spot_id,
+        "items": [
+            {
+                "date": row.observation_date,
+                "sunrise_at": row.sunrise_at,
+                "sunset_at": row.sunset_at,
+                "rainfall_mm": row.rainfall_mm,
+                "temperature_min_c": row.temperature_min_c,
+                "temperature_max_c": row.temperature_max_c,
+                "temperature_mean_c": row.temperature_mean_c,
+                "humidity_mean": row.humidity_mean,
+                "severe_weather": row.severe_weather,
+            }
+            for row in rows
         ],
     }
 

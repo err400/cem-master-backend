@@ -12,8 +12,7 @@ RUN pip install --no-cache-dir --upgrade pip \
 
 RUN addgroup --system cem \
     && adduser --system --ingroup cem cem \
-    && mkdir -p /data \
-    && chown -R cem:cem /app /data
+    && chown -R cem:cem /app
 
 COPY --chown=cem:cem app ./app
 COPY --chown=cem:cem scripts ./scripts

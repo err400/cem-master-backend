@@ -1,171 +1,149 @@
 # CEM Master Backend
 
-FastAPI and SQLAlchemy API for the CEM Master bioacoustic discovery dashboard.
-It provides canonical monitoring spots, species search, daily occurrence
-filters, analysis summaries, conservation rankings, and job input/output links.
+FastAPI/SQLAlchemy API for the public CEM Master bioacoustic dashboard. This
+backend is PostgreSQL-only and expects an independently managed Docker service
+named `cem-database` to contain the schema and indexed analysis data.
 
-## How it fits together
-
-```text
-Frontend Nginx
-  └─ /api proxy
-       └─ FastAPI routes
-            └─ SQLAlchemy
-                 └─ SQLite for development / PostgreSQL for deployment
-```
-
-Latitude and longitude identify one canonical physical spot. Multiple source
-projects can contribute to that location through `spot_sources` without creating
-overlapping public map markers.
-
-## Recommended connected setup
-
-Keep this repository beside `cem-master` and run the combined stack from the
-frontend repository:
+## Request path
 
 ```text
-main-website/
-├── cem-master/
-└── cem-master-backend/
+Browser -> frontend Nginx /api proxy -> FastAPI -> SQLAlchemy -> cem-database
 ```
+
+The backend reads indexed records from PostgreSQL and returns JSON/GeoJSON. It
+does not scan `aggregate.csv` or analysis-result folders during an API request.
+An external ingestion/indexing process is responsible for loading and updating
+the database from those files.
+
+## Prerequisites
+
+- Docker with Compose
+- A running PostgreSQL container whose Docker service/container DNS name is
+  `cem-database`
+- The external bridge network `cem_master_network`
+- The tables and columns represented by `app/models.py`
+
+Create the shared network once if the database deployment has not already done
+so:
 
 ```bash
-cd ../cem-master
-docker compose up --build -d
+docker network create cem_master_network
 ```
 
-See the frontend README for the full combined-stack, networking, persistence,
-shutdown, and PostgreSQL instructions.
+Both `cem-database` and the backend must join that network.
 
-## Backend-only Docker setup
+## Configuration
 
-From this repository:
+Copy the example file and replace the credentials:
+
+```bash
+cp .env.example .env
+```
+
+```dotenv
+DATABASE_URL=postgresql+psycopg://cem_user:strong-password@cem-database:5432/cem_master
+CORS_ORIGINS=http://localhost:8000,http://127.0.0.1:8000
+CEM_MASTER_API_KEY=
+```
+
+`DATABASE_URL` is required. Startup rejects SQLite and other database URLs.
+Keep the real `.env` outside Git.
+
+## Run the backend container
 
 ```bash
 docker compose up --build -d
+docker compose logs -f backend
 ```
 
-This starts only FastAPI at:
+Open:
 
 - API: `http://127.0.0.1:8001`
-- Swagger documentation: `http://127.0.0.1:8001/docs`
-- Health: `http://127.0.0.1:8001/health`
+- Swagger: `http://127.0.0.1:8001/docs`
+- Database-aware health check: `http://127.0.0.1:8001/health`
 
-The standalone Compose file mounts `app/` and `scripts/` read-only and stores
-SQLite at `/data/cem_master.db` in `cem_master_backend_data`.
+A healthy response is:
 
-Seed the standalone database with:
-
-```bash
-docker compose exec backend python scripts/seed_spots.py
+```json
+{"status":"ok","database":"postgresql"}
 ```
 
-Do not run the standalone and connected Compose stacks simultaneously because
-both publish host port 8001.
+If PostgreSQL cannot be queried, health returns HTTP 503.
 
-## Local Python development
+## Existing-schema contract
 
-Create and activate a virtual environment, then install the backend dependencies:
+The database owner must create and migrate the schema. Backend startup does not
+run `create_all()` and does not alter the shared database.
+
+Required tables:
+
+- `spots`: one canonical physical location per latitude/longitude.
+- `spot_sources`: project/spot source IDs contributing to a canonical spot.
+- `species`: searchable names, IUCN status, image, migration, activity hours,
+  seasonality, taxonomy, and network metrics.
+- `spot_summaries`: `recording_count`, `species_richness`, `total_detections`,
+  `active_days`, `job_count`, recording dates, acoustic indices, and assets.
+- `spot_species_summaries`: detection count, active days, activity rank,
+  migration class, occurrence dates, hourly/monthly series, metrics, and assets.
+- `spot_species_daily`: one daily detection total per spot/species/date.
+- `analysis_jobs`: analysis status and public input/output filenames and URLs.
+- `spot_environment_daily`: solar, rainfall, temperature, humidity, and severe
+  weather observations.
+
+The exact SQLAlchemy column types, lengths, keys, and indexes are defined in
+`app/models.py`. PostgreSQL JSON documents use `JSONB`.
+Additional PostgreSQL search/index recommendations are provided in
+`docs/postgres-indexes.sql`; the database owner should apply and manage them.
+
+Important meanings:
+
+- `recording_count` is the number of audio recordings/files.
+- `active_days` is the number of distinct dates with data.
+- `species_richness` is the number of distinct species.
+- Job totals come from `analysis_jobs`; they are not inferred from migration
+  results.
+
+## API endpoints
+
+- `GET /health`
+- `GET /api/v1/spots`
+- `GET /api/v1/spots?species_id=<id>`
+- `GET /api/v1/spots?species_id=<id>&start_date=YYYY-MM-DD&end_date=YYYY-MM-DD`
+- `GET /api/v1/spots?migration_class=resident`
+- `GET /api/v1/spots/{spot_id}`
+- `POST /api/v1/spots`
+- `GET /api/v1/species?search=<common-or-scientific-name>`
+- `GET /api/v1/species?migration_class=migratory`
+- `GET /api/v1/species/{species_id}`
+- `GET /api/v1/spots/{spot_id}/summary`
+- `GET /api/v1/spots/{spot_id}/species/{species_id}`
+- `GET /api/v1/spots/{spot_id}/environment`
+- `GET /api/v1/rankings/threatened-spots`
+
+Spot catalogue responses are GeoJSON with `[longitude, latitude]` coordinates.
+Date filters use `YYYY-MM-DD`. Invalid ranges return HTTP 422, missing records
+return HTTP 404, and failed protected writes return HTTP 401/409 as appropriate.
+
+For compatibility with the current frontend, summary responses contain both
+`active_days` and the temporary alias `recording_days`.
+
+## Local Python process
+
+The backend can run outside Docker, but its PostgreSQL hostname must then be
+reachable from the host. For example, if the database publishes port 5432:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
 uvicorn app.main:app --env-file .env --reload --port 8001
 ```
 
-On Windows PowerShell, activation is:
+When running on the host, the URL normally uses `127.0.0.1` instead of the
+Docker-only hostname `cem-database`.
 
-```powershell
-.\.venv\Scripts\Activate.ps1
-```
+## Optional sample loader
 
-## Configuration
-
-- `DATABASE_URL`: SQLAlchemy connection URL; defaults to local SQLite.
-- `CORS_ORIGINS`: comma-separated frontend origins.
-- `CEM_MASTER_API_KEY`: optional key protecting `POST /api/v1/spots`.
-
-Docker Compose accepts corresponding `BACKEND_` variables so its settings do not
-collide with the backend-only `.env` file:
-
-```dotenv
-BACKEND_PORT=8001
-BACKEND_DATABASE_URL=sqlite:////data/cem_master.db
-BACKEND_CORS_ORIGINS=http://localhost:8000,http://127.0.0.1:8000
-BACKEND_API_KEY=
-```
-
-## Switching to PostgreSQL
-
-No API route or query rewrite is required. `requirements.txt` already includes
-`psycopg[binary]`, and SQLAlchemy selects PostgreSQL from `DATABASE_URL`.
-
-For a PostgreSQL service named `postgres` on the same Docker bridge:
-
-```dotenv
-BACKEND_DATABASE_URL=postgresql+psycopg://cem_user:password@postgres:5432/cem_master
-```
-
-Requirements for the database container:
-
-- Join the same Docker bridge as the backend.
-- Persist `/var/lib/postgresql/data` in a named volume.
-- Start and become healthy before the backend.
-- Use credentials matching the connection URL.
-- Back up the PostgreSQL volume/database independently.
-
-The development SQLite volume is no longer used after switching the connection
-URL, but it remains untouched until explicitly removed.
-
-`Base.metadata.create_all()` can bootstrap an empty database. Add Alembic before
-making schema changes against a populated shared or production database.
-
-## Database tables
-
-- `spots`: canonical coordinates and public spot metadata.
-- `spot_sources`: contributing project/spot identifiers.
-- `species`: taxonomy, common/scientific names, IUCN data, and species metrics.
-- `spot_summaries`: spot richness, detections, acoustic indices, and assets.
-- `spot_species_summaries`: all-date species-at-spot aggregates.
-- `spot_species_daily`: exact daily totals used by date filters.
-- `analysis_jobs`: job status, input/output URLs, filenames, and metadata.
-
-The API stores public HTTP(S) or signed object-storage URLs. Private server paths
-such as `DATA_DIR/projects/...` should be resolved inside backend/ETL code and
-must not be exposed to the browser.
-
-## Sample seed
-
-```bash
-python scripts/seed_spots.py
-```
-
-The seed is idempotent and supplies four Sanjay Van sample spots, five species,
-daily detections, summaries, analysis files, and jobs. Running it again updates
-those records without duplicating them. The URL values use `example.org` and are
-placeholders until real object-storage or API URLs are ingested.
-
-## Main endpoints
-
-- `GET /health`
-- `GET /api/v1/spots`
-- `GET /api/v1/spots?species_id=<id>&start_date=YYYY-MM-DD&end_date=YYYY-MM-DD`
-- `GET /api/v1/spots/{spot_id}`
-- `POST /api/v1/spots`
-- `GET /api/v1/species?search=<common-or-scientific-name>`
-- `GET /api/v1/species/{species_id}`
-- `GET /api/v1/spots/{spot_id}/summary`
-- `GET /api/v1/spots/{spot_id}/species/{species_id}`
-- `GET /api/v1/rankings/threatened-spots`
-
-Spot catalogue responses are GeoJSON with coordinates ordered as
-`[longitude, latitude]`.
-
-## Git hygiene
-
-The repository ignores local `.env`, virtual environments, SQLite databases,
-Python caches, temporary output, logs, and editor settings. Do not
-commit database files, credentials, generated analysis files, or private storage
-paths.
+`scripts/seed_spots.py` remains an optional demonstration loader. It assumes the
+PostgreSQL schema already exists and writes to the configured `DATABASE_URL`.
+It is not run by Compose and should not be used against the real master database.

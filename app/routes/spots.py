@@ -45,6 +45,7 @@ def spot_to_feature(spot: Spot) -> dict[str, Any]:
 @router.get("")
 def list_spots(
     species_id: int | None = Query(default=None, ge=1),
+    migration_class: str | None = Query(default=None, max_length=40),
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
     db: Session = Depends(get_db),
@@ -54,10 +55,19 @@ def list_spots(
     if (start_date or end_date) and species_id is None:
         raise HTTPException(status_code=422, detail="Date filters require species_id")
 
+    migration_class = migration_class.strip() if migration_class else None
     stmt = select(Spot).order_by(Spot.id)
     if species_id is not None:
         if db.get(Species, species_id) is None:
             raise HTTPException(status_code=404, detail="Species not found")
+        summary_filter = select(SpotSpeciesSummary.spot_id).where(
+            SpotSpeciesSummary.species_id == species_id
+        )
+        if migration_class:
+            summary_filter = summary_filter.where(
+                func.lower(SpotSpeciesSummary.migration_class) == migration_class.lower()
+            )
+        stmt = stmt.where(Spot.id.in_(summary_filter))
         if start_date or end_date:
             daily_filter = select(SpotSpeciesDaily.spot_id).where(
                 SpotSpeciesDaily.species_id == species_id,
@@ -68,8 +78,12 @@ def list_spots(
             if end_date:
                 daily_filter = daily_filter.where(SpotSpeciesDaily.observation_date <= end_date)
             stmt = stmt.where(Spot.id.in_(daily_filter))
-        else:
-            stmt = stmt.join(SpotSpeciesSummary).where(SpotSpeciesSummary.species_id == species_id)
+    elif migration_class:
+        stmt = stmt.where(Spot.id.in_(
+            select(SpotSpeciesSummary.spot_id).where(
+                func.lower(SpotSpeciesSummary.migration_class) == migration_class.lower()
+            )
+        ))
 
     spots = db.scalars(stmt).all()
     features = []
@@ -113,7 +127,7 @@ def list_spots(
                     SpotSpeciesSummary.species_id == species_id,
                 ))
                 detection_count = summary.detection_count if summary else 0
-                active_days = summary.recording_days if summary else 0
+                active_days = summary.active_days if summary else 0
             feature["properties"]["detection_count"] = int(detection_count or 0)
             feature["properties"]["active_days"] = int(active_days or 0)
         features.append(feature)
