@@ -100,3 +100,43 @@ class SpotSpeciesSummary(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
     )
+
+
+class SpotSpeciesDaily(Base):
+    """Daily detection totals used for exact occurrence/date filtering."""
+
+    __tablename__ = "spot_species_daily"
+    __table_args__ = (
+        UniqueConstraint(
+            "spot_id", "species_id", "observation_date", name="uq_spot_species_daily"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    spot_id: Mapped[int] = mapped_column(ForeignKey("spots.id", ondelete="CASCADE"), index=True)
+    species_id: Mapped[int] = mapped_column(ForeignKey("species.id", ondelete="CASCADE"), index=True)
+    observation_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    detection_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class AnalysisJob(Base):
+    """Public provenance for a bioacoustic analysis run.
+
+    input_url and output_url must be HTTP(S) API/object-storage URLs. Local DATA_DIR
+    paths remain private to the backend and are never returned to the browser.
+    """
+
+    __tablename__ = "analysis_jobs"
+
+    job_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    spot_id: Mapped[int] = mapped_column(ForeignKey("spots.id", ondelete="CASCADE"), index=True)
+    species_id: Mapped[int | None] = mapped_column(
+        ForeignKey("species.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    analysis_type: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(40), default="completed", nullable=False, index=True)
+    input_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    output_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    job_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)

@@ -1,0 +1,30 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${BACKEND_PORT:-8001}:8001"
+    environment:
+      DATABASE_URL: "${BACKEND_DATABASE_URL:-sqlite:////data/cem_master.db}"
+      CORS_ORIGINS: "${BACKEND_CORS_ORIGINS:-http://localhost:8000,http://127.0.0.1:8000}"
+      CEM_MASTER_API_KEY: "${BACKEND_API_KEY:-}"
+    volumes:
+      - ./app:/app/app:ro
+      - ./scripts:/app/scripts:ro
+      - backend_data:/data
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8001"
+      - --reload
+      - --reload-dir
+      - /app/app
+    restart: unless-stopped
+
+volumes:
+  backend_data:
+    name: cem_master_backend_data
