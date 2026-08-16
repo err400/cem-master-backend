@@ -17,6 +17,15 @@ RUN addgroup --system cem \
 COPY --chown=cem:cem app ./app
 COPY --chown=cem:cem scripts ./scripts
 
+# Migrations must be in the image: nothing else creates the schema, so a
+# container without these can start, report healthy (SELECT 1 succeeds on an
+# empty database) and fail every real query with "relation does not exist".
+# Something still has to INVOKE them -- an init container, a pre-deploy job, or
+# `alembic upgrade head &&` in front of the command. compose.local.yaml does the
+# last of those for local development.
+COPY --chown=cem:cem alembic.ini ./alembic.ini
+COPY --chown=cem:cem migrations ./migrations
+
 USER cem
 
 EXPOSE 8001
