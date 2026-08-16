@@ -1,0 +1,13 @@
+# Development and test dependencies.
+#
+# Kept separate from requirements.txt so the runtime image stays slim -- the
+# Dockerfile installs only requirements.txt. `pytest` and `httpx` were removed
+# from requirements.txt in the Docker commit along with the test suite; this is
+# where they belong rather than being dropped entirely.
+#
+#   pip install -r requirements.txt -r requirements-dev.txt
+
+-r requirements.txt
+
+pytest>=8.0,<9
+httpx>=0.27,<1
