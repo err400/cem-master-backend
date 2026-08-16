@@ -1,0 +1,93 @@
+# Local development overlay — adds a Postgres instance.
+#
+# WHY THIS FILE EXISTS
+# compose.yaml deliberately assumes an externally provisioned database at the
+# hostname `cem-database`, because that is how it works in the cluster. That
+# assumption is correct for deployment and unusable for local work: nothing
+# creates that host, `cem_master_network` is declared external, and
+# DATABASE_URL uses `:?` so compose hard-fails when it is unset. The result is
+# that `docker compose up` cannot start on a developer machine at all.
+#
+# This overlay adds the missing database WITHOUT touching compose.yaml, so the
+# production assumption stays intact.
+#
+# USAGE
+#   docker network create cem_master_network          # once, see scripts/dev-up.sh
+#   docker compose -f compose.yaml -f compose.local.yaml up
+#
+# The service is named `cem-database` on purpose: it must match the hostname in
+# DATABASE_URL so the same connection string works locally and in the cluster.
+#
+# IMAGE CHOICE
+# postgis/postgis rather than plain postgres. PostGIS is not needed today — spot
+# identity uses a rounded geo_key, not geometry — but it is needed the moment the
+# map does viewport (bbox) or radius queries, and swapping the image later means
+# re-provisioning. It is a superset of the postgres image; nothing else changes.
+# pg_trgm (used by docs/postgres-indexes.sql for species search) ships with
+# postgres contrib and is available in either image.
+#
+# TODO once Alembic is merged: change the backend command to
+#   sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload"
+# Right now nothing creates the schema — see REVIEW-2026-08-12.md B1.
+
+services:
+  cem-database:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cem_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_DB: ${POSTGRES_DB:-cem_master}
+      # Keep the server in UTC so timestamps do not shift between a developer's
+      # machine and the cluster.
+      TZ: UTC
+      PGTZ: UTC
+    ports:
+      # Exposed so alembic, psql and the indexer CLI can be run from the host.
+      # Override POSTGRES_PORT if 5432 is already taken locally.
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - cem-db-data:/var/lib/postgresql/data
+      # Runs once when the data volume is first created: creates the test
+      # database and the pg_trgm extension.
+      - ./scripts/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # The backend gates on this; without it the API starts before Postgres is
+      # accepting connections and dies on the first query.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cem_user} -d ${POSTGRES_DB:-cem_master}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    networks:
+      - cem-network
+    restart: unless-stopped
+
+  backend:
+    depends_on:
+      cem-database:
+        condition: service_healthy
+    environment:
+      # Supplies the default that compose.yaml's `:?` refuses to invent.
+      # An explicit DATABASE_URL in the environment still wins.
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://cem_user:change-me@cem-database:5432/cem_master}
+    volumes:
+      # compose.yaml mounts ./app and ./scripts for --reload. Migrations need to
+      # be visible too, otherwise a newly generated revision is not picked up
+      # until the image is rebuilt.
+      - ./app:/app/app:ro
+      - ./scripts:/app/scripts:ro
+      - ./migrations:/app/migrations:ro
+      - ./alembic.ini:/app/alembic.ini:ro
+    # Apply migrations before serving. In the cluster this belongs in an init
+    # container or a pre-deploy job rather than the app command, so that two
+    # replicas starting at once cannot race each other.
+    command:
+      - sh
+      - -c
+      - |
+        alembic upgrade head
+        exec uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload --reload-dir /app/app
+
+volumes:
+  cem-db-data:
+    name: cem_master_db_data
