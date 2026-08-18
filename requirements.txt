@@ -1,5 +1,9 @@
 fastapi>=0.115,<1
 uvicorn[standard]>=0.30,<1
 SQLAlchemy>=2.0,<3
+# Schema migrations. Required at RUNTIME, not just in development: the container
+# runs `alembic upgrade head` before uvicorn, because nothing else creates the
+# schema (create_all was removed and only ever created missing tables anyway).
+alembic>=1.13,<2
 psycopg[binary]>=3.2,<4
 pydantic>=2.7,<3
