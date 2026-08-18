@@ -170,6 +170,32 @@ docker compose -f compose.yaml -f compose.local.yaml exec backend \
   python scripts/seed_spots.py
 ```
 
+## Running the indexer
+
+The indexer turns the compute app's `aggregate.csv` into the rows the map reads.
+**Run it inside the container** — it already has the dependencies, `DATA_DIR`
+mounted read-only, and `DATABASE_URL` set, and this is the same way it will run in
+the cluster:
+
+```bash
+python3 tests/fixtures/build_fixture.py    # from the host; stdlib only, no venv
+./scripts/reindex.sh --dry-run             # compute and report, write nothing
+./scripts/reindex.sh                       # write
+```
+
+`DATA_DIR` in the container defaults to the generated fixture
+(`compose.local.yaml`). Point `DATA_DIR_HOST` at a real tree to index that
+instead. The fixture must be built from the host, because the container mounts
+`DATA_DIR` read-only.
+
+After a successful run, reload http://localhost:8000 — the fixture's spots appear
+on the map with numbers that trace back to a CSV you can count by hand.
+
+Nothing needs installing on your own machine for this. If you *want* to run it
+directly for debugging, you need a virtualenv with `requirements.txt` installed
+(the indexer uses pandas) and the **host-side** database URL — `@localhost:5432`,
+not `@cem-database`.
+
 ## Running the tests
 
 The suite needs a real PostgreSQL — `app/config.py` rejects non-PostgreSQL URLs,

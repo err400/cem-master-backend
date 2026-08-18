@@ -30,16 +30,27 @@ def pytest_report_header() -> str:
         # Never print the URL itself; it carries a password.
         return "cem tests: PostgreSQL configured via TEST_DATABASE_URL"
     return (
-        "cem tests: SKIPPED -- TEST_DATABASE_URL is not set. "
-        "These tests need PostgreSQL (JSONB columns); see tests/conftest.py."
+        "cem tests: TEST_DATABASE_URL is not set -- database-backed tests "
+        f"({', '.join(NEEDS_DATABASE)}) are SKIPPED. "
+        "Rollup tests still run. See tests/conftest.py."
     )
 
 
+# Tests that import the application or touch the database. Everything else --
+# notably the indexer's rollup arithmetic -- is pure computation and must stay
+# runnable without PostgreSQL, because that is the cheapest and most valuable
+# part of the suite to be able to run anywhere.
+NEEDS_DATABASE = [
+    "test_migrations.py",
+    "test_spots.py",
+    "test_indexer_writer.py",
+]
+
 if not TEST_DATABASE_URL:
-    # Skip the whole directory. Doing this with pytest.skip(allow_module_level)
-    # inside a conftest surfaces as an internal traceback, which reads like a
-    # crash rather than a skip.
-    collect_ignore_glob = ["*"]
+    # Skip only the database-dependent modules. Using
+    # pytest.skip(allow_module_level=True) inside a conftest instead surfaces as
+    # an internal traceback, which reads like a crash rather than a skip.
+    collect_ignore = NEEDS_DATABASE
 
 else:
     # Must be set BEFORE importing anything from app: get_settings() is
