@@ -45,3 +45,6 @@ dist/
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# Generated indexer fixture (rebuild with tests/fixtures/build_fixture.py)
+tests/fixtures/data_dir/
