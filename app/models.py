@@ -15,12 +15,25 @@ class Spot(Base):
     __tablename__ = "spots"
     __table_args__ = (
         UniqueConstraint("source_project_id", "source_spot_id", name="uq_source_project_spot"),
-        UniqueConstraint("latitude", "longitude", name="uq_spot_coordinates"),
+        # Replaces UniqueConstraint("latitude", "longitude"). Exact float equality
+        # made two GPS readings of the same tree, differing in the 7th decimal,
+        # into two separate map markers. geo_key rounds to ~1.1 m first.
+        UniqueConstraint("geo_key", name="uq_spot_geo_key"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     source_project_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     source_spot_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    # Rounded-coordinate identity for a physical location: "28.54100:77.16950".
+    #
+    # A derived key rather than a stored comparison, because rounding inside a
+    # WHERE clause cannot use an index and reintroduces float fuzziness. Nullable
+    # so rows predating the column (and any created without coordinates) remain
+    # valid; NULLs do not collide under a UNIQUE constraint in PostgreSQL.
+    #
+    # This is what makes a spot's identity survive a rename: the recorder does
+    # not move, so the key does not change. See INDEXING-PLAN 6.3.
+    geo_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     latitude: Mapped[float] = mapped_column(Float, nullable=False)

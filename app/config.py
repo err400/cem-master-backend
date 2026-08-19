@@ -1,10 +1,17 @@
 import os
 from functools import lru_cache
+from pathlib import Path
 
 
 class Settings:
     def __init__(self) -> None:
         self.app_name = "CEM Master Backend"
+        # Root of the compute app's data volume, shared read-only with this
+        # service in the cluster. Only the indexer reads it; the API never does.
+        # Optional, because the API must start without it -- a missing DATA_DIR
+        # should fail the indexer, not take the whole site down.
+        data_dir = os.getenv("DATA_DIR", "").strip()
+        self.data_dir: Path | None = Path(data_dir).resolve() if data_dir else None
         self.database_url = os.getenv("DATABASE_URL", "").strip()
         if not self.database_url:
             raise RuntimeError(

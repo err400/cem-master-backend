@@ -70,6 +70,8 @@ services:
       # Supplies the default that compose.yaml's `:?` refuses to invent.
       # An explicit DATABASE_URL in the environment still wins.
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://cem_user:change-me@cem-database:5432/cem_master}
+      # Mirrors the cluster: the compute app writes this volume, we only read it.
+      DATA_DIR: /data
     volumes:
       # compose.yaml mounts ./app and ./scripts for --reload. Migrations need to
       # be visible too, otherwise a newly generated revision is not picked up
@@ -78,6 +80,12 @@ services:
       - ./scripts:/app/scripts:ro
       - ./migrations:/app/migrations:ro
       - ./alembic.ini:/app/alembic.ini:ro
+      # The compute app's DATA_DIR, READ-ONLY. In the cluster this is the shared
+      # volume the compute container writes; locally it is the fixture, so the
+      # indexer can be exercised inside the container exactly as it will run in
+      # production. `:ro` is not decoration -- the indexer has no reason to write
+      # here, and enforcing that turns a category of bug into an immediate error.
+      - ${DATA_DIR_HOST:-./tests/fixtures/data_dir}:/data:ro
     # Apply migrations before serving. In the cluster this belongs in an init
     # container or a pre-deploy job rather than the app command, so that two
     # replicas starting at once cannot race each other.

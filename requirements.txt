@@ -7,3 +7,12 @@ SQLAlchemy>=2.0,<3
 alembic>=1.13,<2
 psycopg[binary]>=3.2,<4
 pydantic>=2.7,<3
+# Used only by app/indexer, which reads the compute app's aggregate.csv and
+# groups millions of detection rows into summaries. In the runtime requirements
+# rather than dev because the indexer runs from this same image -- as a CronJob
+# or `docker compose exec` -- not from a developer's laptop.
+#
+# It costs ~100 MB of image (pandas + numpy). If that becomes a problem, the
+# indexer can move to its own image with a separate requirements file; the code
+# is already a self-contained package with no imports from app.routes.
+pandas>=2.2,<3
