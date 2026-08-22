@@ -199,6 +199,9 @@ def build(out: Path) -> Path:
     (project_root / "project.json").write_text(json.dumps({
         "created_at": "2026-04-09T00:00:00+00:00",
         "last_modified": "2026-04-12T00:00:00+00:00",
+        "visibility": "public",
+        "is_public": True,
+        "retention_hours": None,
     }, indent=2))
 
     # Audio files, per spot. Contents are irrelevant -- the indexer only ever

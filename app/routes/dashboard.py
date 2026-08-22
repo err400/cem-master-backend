@@ -127,7 +127,7 @@ def get_spot_summary(spot_id: int, db: Session = Depends(get_db)) -> dict[str, A
             "first_recording_date": summary.first_recording_date if summary else None,
             "last_recording_date": summary.last_recording_date if summary else None,
             "acoustic_indices": summary.acoustic_indices if summary else {},
-            "analysis_assets": summary.analysis_assets if summary else [],
+            "analysis_assets": (summary.analysis_assets or []) if summary else [],
         },
         "top_species": [
             {

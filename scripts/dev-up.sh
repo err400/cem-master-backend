@@ -47,7 +47,18 @@ fi
 # This is the value the BACKEND CONTAINER uses, so the host is the compose
 # service name `cem-database`, not localhost. Connecting from your own machine
 # (pytest, psql, alembic) uses localhost instead -- see README / conftest.
-export DATABASE_URL="${DATABASE_URL:-postgresql+psycopg://cem_user:change-me@cem-database:5432/cem_master}"
+DEFAULT_DATABASE_URL="postgresql+psycopg://cem_user:change-me@cem-database:5432/cem_master"
+export DATABASE_URL="${DATABASE_URL:-$DEFAULT_DATABASE_URL}"
+
+case "$DATABASE_URL" in
+    postgresql://*|postgresql+psycopg://*) ;;
+    *)
+        echo "warning: DATABASE_URL is not PostgreSQL: $DATABASE_URL" >&2
+        echo "         The master backend only supports PostgreSQL; using the local compose database." >&2
+        echo >&2
+        export DATABASE_URL="$DEFAULT_DATABASE_URL"
+        ;;
+esac
 
 case "$DATABASE_URL" in
     *@localhost:*|*@127.0.0.1:*)

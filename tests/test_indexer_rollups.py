@@ -11,6 +11,7 @@ go and re-derive it rather than adjusting the expectation to match the code.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -67,6 +68,29 @@ def test_project_name_cannot_escape_the_projects_dir(tmp_path: Path) -> None:
     (tmp_path / "projects").mkdir()
     with pytest.raises(source.SourceError, match="escapes"):
         source.read_aggregate(tmp_path, "../../etc")
+
+
+def test_project_visibility_controls_indexing(data_dir: Path) -> None:
+    meta_path = data_dir / "projects" / PROJECT / "project.json"
+    meta = json.loads(meta_path.read_text())
+
+    assert source.is_project_public(data_dir, PROJECT) is True
+    assert source.list_projects(data_dir) == [PROJECT]
+
+    meta_path.unlink()
+    assert source.is_project_public(data_dir, PROJECT) is False
+    assert source.list_projects(data_dir) == []
+    meta_path.write_text(json.dumps(meta))
+
+    meta.update({"visibility": "private", "is_public": False, "retention_hours": 168})
+    meta_path.write_text(json.dumps(meta))
+    assert source.is_project_public(data_dir, PROJECT) is False
+    assert source.list_projects(data_dir) == []
+
+    meta.update({"visibility": "public", "is_public": True, "retention_hours": None})
+    meta_path.write_text(json.dumps(meta))
+    assert source.is_project_public(data_dir, PROJECT) is True
+    assert source.list_projects(data_dir) == [PROJECT]
 
 
 # ------------------------------------------------------------ coordinates ----

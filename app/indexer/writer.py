@@ -34,6 +34,7 @@ from app.models import (
     AnalysisJob,
     Species,
     Spot,
+    SpotEnvironmentDaily,
     SpotSource,
     SpotSpeciesDaily,
     SpotSpeciesSummary,
@@ -87,6 +88,58 @@ class IndexReport:
         for warning in self.warnings:
             lines.append(f"  warning: {warning}")
         return "\n".join(lines)
+
+
+def prune_project(db: Session, project: str) -> int:
+    """Remove one project's rows from the public catalog.
+
+    Used when a project disappears from DATA_DIR or is marked private. Deletes
+    child rows explicitly instead of relying on database-specific cascade
+    settings, then removes the project's spots and source aliases.
+    """
+    spot_ids = {
+        row[0]
+        for row in db.execute(
+            select(Spot.id).where(Spot.source_project_id == project)
+        ).all()
+    }
+    spot_ids.update(
+        row[0]
+        for row in db.execute(
+            select(SpotSource.spot_id).where(SpotSource.source_project_id == project)
+        ).all()
+    )
+    if not spot_ids:
+        return 0
+
+    ids = sorted(spot_ids)
+    db.execute(delete(AnalysisJob).where(AnalysisJob.spot_id.in_(ids)))
+    db.execute(delete(SpotSpeciesDaily).where(SpotSpeciesDaily.spot_id.in_(ids)))
+    db.execute(delete(SpotSpeciesSummary).where(SpotSpeciesSummary.spot_id.in_(ids)))
+    db.execute(delete(SpotSummary).where(SpotSummary.spot_id.in_(ids)))
+    db.execute(delete(SpotEnvironmentDaily).where(SpotEnvironmentDaily.spot_id.in_(ids)))
+    db.execute(delete(SpotSource).where(SpotSource.source_project_id == project))
+    removed = db.execute(delete(Spot).where(Spot.source_project_id == project)).rowcount or 0
+    return removed
+
+
+def prune_projects_not_in(db: Session, keep_projects: set[str]) -> dict[str, int]:
+    known = {
+        row[0]
+        for row in db.execute(select(Spot.source_project_id).distinct()).all()
+        if row[0]
+    }
+    known.update(
+        row[0]
+        for row in db.execute(select(SpotSource.source_project_id).distinct()).all()
+        if row[0]
+    )
+    removed: dict[str, int] = {}
+    for project in sorted(known - keep_projects):
+        count = prune_project(db, project)
+        if count:
+            removed[project] = count
+    return removed
 
 
 def _upsert_species(db: Session, rollups: list[SpotRollup], report: IndexReport) -> dict[str, Species]:
