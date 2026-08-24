@@ -9,9 +9,11 @@ services:
       DATABASE_URL: "${DATABASE_URL:?Set DATABASE_URL to the cem-database PostgreSQL URL}"
       CORS_ORIGINS: "${BACKEND_CORS_ORIGINS:-http://localhost:8000,http://127.0.0.1:8000}"
       CEM_MASTER_API_KEY: "${BACKEND_API_KEY:-}"
+      DATA_DIR: /data
     volumes:
       - ./app:/app/app:ro
       - ./scripts:/app/scripts:ro
+      - ${CEM_DATA_DIR_HOST:-../cem-backend/data}:/data:ro
     command:
       - uvicorn
       - app.main:app
@@ -22,6 +24,31 @@ services:
       - --reload
       - --reload-dir
       - /app/app
+    networks:
+      - cem-network
+    restart: unless-stopped
+
+  indexer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: "${DATABASE_URL:?Set DATABASE_URL to the cem-database PostgreSQL URL}"
+      DATA_DIR: /data
+      INDEXER_POLL_SECONDS: ${INDEXER_POLL_SECONDS:-30}
+    volumes:
+      - ./app:/app/app:ro
+      - ${CEM_DATA_DIR_HOST:-../cem-backend/data}:/data:ro
+    command:
+      - python
+      - -m
+      - app.indexer
+      - --data-dir
+      - /data
+      - --all
+      - --watch
+    healthcheck:
+      disable: true
     networks:
       - cem-network
     restart: unless-stopped

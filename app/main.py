@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.database import get_db
-from app.routes import dashboard, spots
+from app.routes import dashboard, indexer, spots
 
 settings = get_settings()
 
@@ -36,3 +36,4 @@ def health(db: Session = Depends(get_db)) -> dict[str, str]:
 
 app.include_router(spots.router)
 app.include_router(dashboard.router)
+app.include_router(indexer.router)

@@ -19,10 +19,9 @@ Layout, verified against cem-backend/server/app/{projects,jobs}.py:
             work/aggregate.csv
             results/<step>/...
 
-Treat everything here as READ-ONLY and TRANSIENT. The compute app's own config
-says "Cluster = compute, not storage", and retention.py deletes job folders after
-RETENTION_HOURS (default 168h). Read promptly; never assume a second read will
-find the same thing.
+Treat everything here as READ-ONLY from the master side. Private project job
+folders expire after RETENTION_HOURS (default 168h); public projects are kept
+indefinitely and are the only projects the indexer publishes.
 """
 
 from __future__ import annotations
@@ -205,8 +204,26 @@ def list_projects(data_dir: Path) -> list[str]:
     return sorted(
         p.name
         for p in projects_dir.iterdir()
-        if p.is_dir() and not p.name.startswith(".")
+        if p.is_dir() and not p.name.startswith(".") and is_project_public(data_dir, p.name)
     )
+
+
+def is_project_public(data_dir: Path, project: str) -> bool:
+    """Whether a project entry is indexable by the public catalog.
+
+    New compute-backend projects explicitly write ``visibility: private`` and
+    Make Public flips that to ``public``. Missing or unreadable metadata is
+    treated as private so a partial/stale DATA_DIR entry cannot leak publicly.
+    """
+    meta_path = project_root(data_dir, project) / "project.json"
+    if not meta_path.is_file():
+        return False
+    try:
+        meta = json.loads(meta_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SourceError(f"cannot parse {meta_path}: {exc}") from exc
+    visibility = meta.get("visibility")
+    return bool(meta.get("is_public")) or str(visibility or "").lower() == "public"
 
 
 def read_aggregate(data_dir: Path, project: str) -> pd.DataFrame:
