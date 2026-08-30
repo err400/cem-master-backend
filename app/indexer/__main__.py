@@ -46,6 +46,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=os.getenv("INDEXER_DATABASE_URL") or os.getenv("DATABASE_URL", ""),
         help="target database (default: $INDEXER_DATABASE_URL, then $DATABASE_URL)",
     )
+    parser.add_argument(
+        "--filebrowser-url",
+        default=os.getenv("FILEBROWSER_PUBLIC_URL", ""),
+        help=(
+            "public base URL of FileBrowser, as a visitor's browser reaches it "
+            "(e.g. http://localhost:8097). Used to turn the share hashes the "
+            "compute app recorded into download links. Blank means job outputs "
+            "are named but not linked -- no link is better than a broken one."
+        ),
+    )
     scope = parser.add_mutually_exclusive_group(required=True)
     scope.add_argument("--project", help="index a single project by name")
     scope.add_argument("--all", action="store_true", help="index every project found")
@@ -68,7 +78,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _index_project(db: Session, data_dir: Path, project: str, dry_run: bool) -> bool:
+def _index_project(
+    db: Session,
+    data_dir: Path,
+    project: str,
+    dry_run: bool,
+    filebrowser_url: str = "",
+) -> bool:
     """Index one project inside its own transaction. Returns True on success."""
     try:
         detections = source.read_aggregate(data_dir, project)
@@ -95,6 +111,7 @@ def _index_project(db: Session, data_dir: Path, project: str, dry_run: bool) -> 
         verdicts=verdicts,
         indices=indices,
         pooled_verdicts=pooled,
+        filebrowser_url=filebrowser_url,
     )
 
     if dry_run:
@@ -201,7 +218,13 @@ def _run_once(args: argparse.Namespace, data_dir: Path, url: str) -> int:
             # leave another's writes pending in a poisoned transaction.
             with Session(engine) as db:
                 try:
-                    if not _index_project(db, data_dir, project, args.dry_run):
+                    if not _index_project(
+                        db,
+                        data_dir,
+                        project,
+                        args.dry_run,
+                        filebrowser_url=getattr(args, "filebrowser_url", ""),
+                    ):
                         failures += 1
                 except Exception as exc:  # noqa: BLE001 - report and continue
                     db.rollback()

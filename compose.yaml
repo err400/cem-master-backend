@@ -53,6 +53,35 @@ services:
       - cem-network
     restart: unless-stopped
 
+  # The public map page. Defined HERE, not in cem-master-frontend, so that one
+  # `docker compose up -d` in this repo brings up the whole master stack --
+  # database, API, indexer and page. One repo owns each service; the frontend
+  # repo owns none.
+  #
+  # ⚠️ `context: ../cem-master-frontend` assumes a sibling checkout. That is a
+  # real constraint and it is why the README says to clone the two repos next to
+  # each other. Override with MASTER_FRONTEND_CONTEXT if your layout differs.
+  frontend:
+    build:
+      context: ${MASTER_FRONTEND_CONTEXT:-../cem-master-frontend}
+      dockerfile: Dockerfile
+    ports:
+      - "${MASTER_FRONTEND_PORT:-8000}:80"
+    volumes:
+      # Bind-mounted over the baked-in copy so editing the page needs a restart,
+      # not a rebuild. Read-only: nothing in the container should write here.
+      - ${MASTER_FRONTEND_CONTEXT:-../cem-master-frontend}/index.html:/usr/share/nginx/html/index.html:ro
+      - ${MASTER_FRONTEND_CONTEXT:-../cem-master-frontend}/js:/usr/share/nginx/html/js:ro
+      - ${MASTER_FRONTEND_CONTEXT:-../cem-master-frontend}/styles:/usr/share/nginx/html/styles:ro
+      - ${MASTER_FRONTEND_CONTEXT:-../cem-master-frontend}/leaflet:/usr/share/nginx/html/leaflet:ro
+    networks:
+      - cem-network
+    restart: unless-stopped
+    # Deliberately NOT `depends_on: backend condition: service_healthy`. If the
+    # API is down the page should still load and its calls should 502 -- a
+    # visible error is easier to diagnose than a container that silently refuses
+    # to start. nginx.conf resolves `backend` by Docker DNS on this network.
+
 networks:
   cem-network:
     external: true

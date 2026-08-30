@@ -31,7 +31,10 @@ Layout produced (verified against cem-backend/server/app/projects.py and jobs.py
             results/acoustic_indices/acoustic_indices_summary.csv
 
 job.json uses the REAL shape: status, params and timings live on entries in
-tasks[], not at the top level (see cem-backend/server/app/jobs.py:161).
+tasks[], not at the top level (see cem-backend/server/app/jobs.py:161). Two of
+the three jobs also carry a "shares" block, the FileBrowser share records the
+compute app writes via job.set_share(); acoustic_indices has none, because
+FileBrowser is optional and a job without a share is the normal case today.
 
 Note the casing mismatch this reproduces on purpose: geo.json names are
 UPPERCASE (the frontend does name.replace(/\\s+/g,'').toUpperCase()) while
@@ -249,6 +252,18 @@ def build(out: Path) -> Path:
                 "results": ["results/birdnet/birdnet_results.csv"],
             }
         ],
+        # FileBrowser shares, exactly as runner.py records them. Note the path:
+        # for the birdnet step the compute app shares work/, not results/ --
+        # `share_dir = job.work_dir if step == meta.BIRDNET else ...`.
+        # expire 0 means the link never expires.
+        "shares": {
+            "birdnet": {
+                "hash": "aBcD1234",
+                "path": f"/projects/{PROJECT}/birdnet/{BIRDNET_JOB}/work",
+                "expire": 0,
+                "hasPassword": False,
+            }
+        },
     }, indent=2))
 
     for name in filenames:
@@ -286,6 +301,15 @@ def build(out: Path) -> Path:
             "finished_at": "2026-04-12T05:05:00+00:00",
             "params": {},
         }],
+        "shares": {
+            "migratory_classification": {
+                "hash": "eFgH5678",
+                "path": f"/projects/{PROJECT}/migratory_classification/"
+                        f"{MIGRATORY_JOB}/results/migratory_classification",
+                "expire": 0,
+                "hasPassword": False,
+            }
+        },
     }, indent=2))
     _write_csv(
         mig / "results" / "migratory_classification"
@@ -323,6 +347,10 @@ def build(out: Path) -> Path:
     )
 
     # Acoustic indices, per spot. One row per spot is what the panel shows.
+    # Deliberately NO "shares" key: FileBrowser is optional on the compute side
+    # (FILEBROWSER_BASE_URL defaults to blank), so jobs without a share are the
+    # normal case today and must still index cleanly, with a named output file
+    # and no link.
     ai = project_root / "acoustic_indices" / "job-0003"
     (ai / "results" / "acoustic_indices").mkdir(parents=True)
     (ai / "job.json").write_text(json.dumps({

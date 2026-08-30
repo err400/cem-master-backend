@@ -51,7 +51,10 @@ def data_dir(tmp_path: Path) -> Path:
     return build_fixture.build(tmp_path / "data_dir")
 
 
-def _index(data_dir: Path, project: str = PROJECT):
+FILEBROWSER_URL = "http://localhost:8097"
+
+
+def _index(data_dir: Path, project: str = PROJECT, filebrowser_url: str = FILEBROWSER_URL):
     """Run one full pass, exactly as the CLI does."""
     with SessionLocal() as db:
         df = source.read_aggregate(data_dir, project)
@@ -69,6 +72,7 @@ def _index(data_dir: Path, project: str = PROJECT):
             verdicts=verdicts,
             indices=indices,
             pooled_verdicts=pooled,
+            filebrowser_url=filebrowser_url,
         )
         db.commit()
         return report
@@ -466,9 +470,94 @@ def test_multi_spot_jobs_get_one_row_per_spot(clean_db, data_dir: Path) -> None:
         assert birdnet.started_at is not None and birdnet.completed_at is not None
         assert birdnet.status == "completed"
 
-        # Local DATA_DIR paths must never reach the browser.
-        assert all(r.input_url is None and r.output_url is None for r in rows)
+        # Local DATA_DIR paths must never reach the browser. Only FileBrowser
+        # share links go out, and inputs have no share, so input_url stays null.
+        assert all(r.input_url is None for r in rows)
+        assert all(
+            r.output_url is None or r.output_url.startswith(FILEBROWSER_URL)
+            for r in rows
+        ), "no DATA_DIR path may leak into output_url"
         assert "birdnet_results.csv" in birdnet.job_metadata["outputs"]
+
+
+# --- job artifact links ---------------------------------------------------
+#
+# The compute app already creates a FileBrowser share per step and records its
+# hash in job.json. The indexer's job is only to turn those into URLs the
+# frontend's "Analysis jobs" table can render -- never to create or revoke one.
+
+
+def test_output_url_comes_from_the_recorded_share(clean_db, data_dir: Path) -> None:
+    _index(data_dir)
+    with SessionLocal() as db:
+        birdnet = db.scalars(
+            select(AnalysisJob).where(AnalysisJob.analysis_type == "birdnet")
+        ).first()
+        assert birdnet.output_url == f"{FILEBROWSER_URL}/share/aBcD1234"
+
+
+def test_a_job_without_a_share_is_named_but_not_linked(clean_db, data_dir: Path) -> None:
+    """FileBrowser is optional on the compute side, so this is the normal case
+    today. The row must still be useful: a named output, and no dead link."""
+    _index(data_dir)
+    with SessionLocal() as db:
+        job = db.scalars(
+            select(AnalysisJob).where(AnalysisJob.analysis_type == "acoustic_indices")
+        ).first()
+        assert job.output_url is None
+        assert job.job_metadata["output_file"] == "acoustic_indices_summary.csv"
+
+
+def test_no_links_at_all_when_filebrowser_is_unconfigured(clean_db, data_dir: Path) -> None:
+    """A blank base URL must yield null, not 'None/share/x' or '/share/x'."""
+    _index(data_dir, filebrowser_url="")
+    with SessionLocal() as db:
+        rows = db.scalars(select(AnalysisJob)).all()
+        assert rows and all(r.output_url is None for r in rows)
+
+
+def test_expired_shares_are_not_published(clean_db, data_dir: Path) -> None:
+    """A share past its expire 404s. Publishing it would be worse than
+    publishing nothing, because the row asserts the artifact is reachable."""
+    import json
+    import time
+
+    job_json = data_dir / "projects" / PROJECT / "birdnet" / "job-0001" / "job.json"
+    meta = json.loads(job_json.read_text())
+    meta["shares"]["birdnet"]["expire"] = time.time() - 3600
+    job_json.write_text(json.dumps(meta))
+
+    _index(data_dir)
+    with SessionLocal() as db:
+        birdnet = db.scalars(
+            select(AnalysisJob).where(AnalysisJob.analysis_type == "birdnet")
+        ).first()
+        assert birdnet.output_url is None
+
+
+def test_input_is_described_since_it_has_no_share(clean_db, data_dir: Path) -> None:
+    _index(data_dir)
+    with SessionLocal() as db:
+        birdnet = db.scalars(
+            select(AnalysisJob).where(AnalysisJob.analysis_type == "birdnet")
+        ).first()
+        # 7 recordings, not 24 -- the fixture's 24 rows are DETECTIONS, and
+        # audio_spots.json is keyed by file. Counting rows here would have
+        # reported the wrong thing in a way nobody would notice on the UI.
+        assert birdnet.job_metadata["input_file"] == "aggregate.csv + 7 recording(s)"
+        assert len(birdnet.job_metadata["input_files"]) == 7
+        assert birdnet.input_url is None
+
+
+def test_the_api_reads_the_keys_the_indexer_writes(clean_db, data_dir: Path) -> None:
+    """Guards the seam that was broken: the writer stored a plural `outputs`
+    list while routes/dashboard.py read singular `input_file`/`output_file`,
+    so all four columns rendered blank."""
+    _index(data_dir)
+    with SessionLocal() as db:
+        for row in db.scalars(select(AnalysisJob)).all():
+            assert "input_file" in row.job_metadata
+            assert "output_file" in row.job_metadata
 
 
 def test_jobs_are_idempotent_and_swept(clean_db, data_dir: Path) -> None:

@@ -42,5 +42,31 @@ if [[ ! " ${args[*]-} " =~ " --project " && ! " ${args[*]-} " =~ " --all " ]]; t
     args+=(--all)
 fi
 
-exec docker compose "${COMPOSE_FILES[@]}" exec backend \
+# `docker compose exec` runs inside the container that ALREADY EXISTS. It does
+# not re-read compose.yaml's environment, so setting FILEBROWSER_PUBLIC_URL in
+# your shell and running this script has no effect -- the indexer sees the value
+# the container was created with, and every output link comes back empty with no
+# error. Forward it explicitly, and say so, because a silently missing link is
+# indistinguishable from a job that has no share.
+exec_env=()
+container_fb="$(docker compose "${COMPOSE_FILES[@]}" exec -T backend \
+    printenv FILEBROWSER_PUBLIC_URL 2>/dev/null | tr -d '\r\n' || true)"
+
+if [[ -n "${FILEBROWSER_PUBLIC_URL:-}" && "${FILEBROWSER_PUBLIC_URL}" != "${container_fb}" ]]; then
+    echo "note: forwarding FILEBROWSER_PUBLIC_URL=${FILEBROWSER_PUBLIC_URL} into the container." >&2
+    echo "      The container itself has '${container_fb}'. To make this stick — and to fix" >&2
+    echo "      the background 'indexer' service, which re-indexes every ${INDEXER_POLL_SECONDS:-30}s and would" >&2
+    echo "      otherwise overwrite these links with nulls — put it in .env and run:" >&2
+    echo "          ./scripts/dev-up.sh -d" >&2
+    echo >&2
+    exec_env=(-e "FILEBROWSER_PUBLIC_URL=${FILEBROWSER_PUBLIC_URL}")
+elif [[ -z "${FILEBROWSER_PUBLIC_URL:-}" && -z "${container_fb}" ]]; then
+    echo "note: FILEBROWSER_PUBLIC_URL is not set, so job outputs will be named but" >&2
+    echo "      not linked. Set it in .env and run ./scripts/dev-up.sh -d to enable links." >&2
+    echo >&2
+fi
+
+# `${a[@]+"${a[@]}"}` rather than plain `"${a[@]}"`: macOS ships bash 3.2, where
+# expanding an EMPTY array under `set -u` is an unbound-variable error.
+exec docker compose "${COMPOSE_FILES[@]}" exec ${exec_env[@]+"${exec_env[@]}"} backend \
     python -m app.indexer --data-dir /data "${args[@]}"

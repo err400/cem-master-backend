@@ -72,6 +72,11 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://cem_user:change-me@cem-database:5432/cem_master}
       # Mirrors the cluster: the compute app writes DATA_DIR, we only read it.
       DATA_DIR: /data
+      # The API itself never uses this -- but ./scripts/reindex.sh runs the
+      # indexer INSIDE this container, so without it a manual reindex silently
+      # produces rows with no output links while the `indexer` service's rows
+      # have them. Same value in both places, one source of truth below.
+      FILEBROWSER_PUBLIC_URL: ${FILEBROWSER_PUBLIC_URL:-}
     volumes:
       # compose.yaml mounts ./app and ./scripts for --reload. Migrations need to
       # be visible too, otherwise a newly generated revision is not picked up
@@ -93,6 +98,21 @@ services:
         alembic upgrade head
         exec uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload --reload-dir /app/app
 
+    # NOTE: the backend deliberately does NOT index at startup. Indexing a real
+    # DATA_DIR takes minutes, so the container would fail its healthcheck and be
+    # restarted, re-indexing from scratch each time; the API also scales to
+    # several replicas, which would all index the same data at once and race on
+    # the upserts and the delete pass. And a process restart is unrelated to
+    # whether new data has arrived, which is the thing that should trigger an
+    # index. That is what the separate `indexer` service below is for.
+
+  # Indexing runs in its own container, not inside the API. It polls DATA_DIR
+  # and re-indexes what changed, which is the "sweep" half of INDEXING-PLAN 4.4;
+  # the other half is POST /api/v1/indexer/projects/{project}, called when an
+  # analysis finishes.
+  #
+  # It shares the API image because the indexer is part of the same package --
+  # only the command differs.
   indexer:
     depends_on:
       cem-database:
@@ -101,8 +121,30 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://cem_user:change-me@cem-database:5432/cem_master}
       DATA_DIR: /data
       INDEXER_POLL_SECONDS: ${INDEXER_POLL_SECONDS:-30}
+      # Turns the share hashes recorded in job.json into download links on the
+      # "Analysis jobs" table. This is the address a VISITOR'S BROWSER uses, so
+      # it is a host/public URL -- NOT the compute backend's FILEBROWSER_BASE_URL,
+      # which is the container-internal http://filebrowser:80 and dead outside
+      # that network.
+      #
+      # Blank by default, matching the compute side: FileBrowser is optional
+      # there too, so most job.json files have no shares at all and the jobs
+      # table simply names its outputs without linking them.
+      #
+      # Before setting this in the cluster, check with Hridayansh:
+      #  - shares are created at ANALYSIS time, for private projects as well;
+      #    only project visibility keeps those rows out of the catalogue
+      #  - mark_private() sets retention_hours=168, so links stay live for up
+      #    to 7 days after a project is unpublished, while its rows disappear
+      #    on the next index pass -- shares should be revoked at unpublish
+      #  - FileBrowser's own UI on :8097 is a separate surface and ships with
+      #    admin/admin; it must not be publicly reachable as-is
+      FILEBROWSER_PUBLIC_URL: ${FILEBROWSER_PUBLIC_URL:-}
     volumes:
       - ./app:/app/app:ro
+      # Read-only: the indexer must never write into the compute app's data.
+      # Which projects it may publish is decided by visibility in project.json,
+      # not by what happens to be on disk.
       - ${CEM_DATA_DIR_HOST:-${DATA_DIR_HOST:-../cem-backend/data}}:/data:ro
 
 volumes:

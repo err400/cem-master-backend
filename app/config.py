@@ -12,6 +12,18 @@ class Settings:
         # should fail the indexer, not take the whole site down.
         data_dir = os.getenv("DATA_DIR", "").strip()
         self.data_dir: Path | None = Path(data_dir).resolve() if data_dir else None
+        # Base URL for FileBrowser share links, as a BROWSER must reach it --
+        # e.g. http://localhost:8097. Deliberately not the compute backend's
+        # FILEBROWSER_BASE_URL, which is the container-internal address
+        # (http://filebrowser:80) and is unreachable from a visitor's machine.
+        #
+        # The compute app stores only the share hash in job.json; the URL is
+        # built from it. Blank means job artifacts are listed by filename with
+        # no download link, which is the correct default -- a broken link is
+        # worse than an absent one.
+        self.filebrowser_public_url: str = os.getenv(
+            "FILEBROWSER_PUBLIC_URL", ""
+        ).strip().rstrip("/")
         self.database_url = os.getenv("DATABASE_URL", "").strip()
         if not self.database_url:
             raise RuntimeError(

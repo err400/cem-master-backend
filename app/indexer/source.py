@@ -27,6 +27,7 @@ indefinitely and are the only projects the indexer publishes.
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -40,6 +41,11 @@ REQUIRED_AGGREGATE_COLUMNS = frozenset(
 
 AGGREGATE_REL = Path("dataset") / "aggregate.csv"
 PROCESSED_REL = Path("dataset") / "processed_files.txt"
+
+
+# Mirrors cem-backend/server/app/pipeline_meta.py's BIRDNET. The one step whose
+# outputs are not under results/<step>/ -- see JobRef.output_dir.
+BIRDNET_STEP = "birdnet"
 
 
 class SourceError(RuntimeError):
@@ -57,6 +63,24 @@ class JobRef:
     @property
     def results_dir(self) -> Path:
         return self.root / "results"
+
+    @property
+    def output_dir(self) -> Path:
+        """Where this job's real outputs actually live.
+
+        ⚠️ birdnet is the exception: it writes aggregate.csv, output.csv and
+        processed_files.txt into ``work/``, and leaves only ``_run.log`` in
+        ``results/birdnet/``. Every other step writes to ``results/<step>/``.
+
+        This mirrors runner.py exactly --
+
+            share_dir = job.work_dir if step == meta.BIRDNET else job.step_results_dir(step)
+
+        -- and it has to, or the catalogue names a file that is not in the
+        directory the share link opens. Reading only ``results/`` made a birdnet
+        job's output look like a log file.
+        """
+        return self.root / "work" if self.script == BIRDNET_STEP else self.results_dir
 
     @property
     def geo_path(self) -> Path:
@@ -142,10 +166,86 @@ class JobRef:
         return []
 
     def result_files(self) -> list[Path]:
-        """Every output file, relative paths, sorted."""
-        if not self.results_dir.is_dir():
+        """Every output file, sorted. See ``output_dir`` for where that is."""
+        directory = self.output_dir
+        if not directory.is_dir():
             return []
-        return sorted(p for p in self.results_dir.rglob("*") if p.is_file())
+        return sorted(p for p in directory.rglob("*") if p.is_file())
+
+    def shares(self) -> dict[str, dict]:
+        """FileBrowser share records this job already has, keyed by step.
+
+        The compute app creates a share per step as the analysis finishes
+        (``runner.py`` -> ``job.set_share``) and stores the record under
+        ``shares`` in job.json. Each holds a ``hash`` that identifies a
+        publicly readable link to that step's output DIRECTORY.
+
+        The indexer only reads what is already there -- it never creates or
+        revokes a share. Share lifecycle belongs to the side that owns the
+        files, and creating one here would mean the master service could
+        publish a link to something the compute app had not agreed to share.
+        """
+        shares = self.read_meta().get("shares")
+        if not isinstance(shares, dict):
+            return {}
+        return {
+            str(step): record
+            for step, record in shares.items()
+            if isinstance(record, dict) and record.get("hash")
+        }
+
+    def primary_share(self) -> dict | None:
+        """The share for this job's own step, else any share it has.
+
+        A job folder is ``<script>/<job_id>/``, so its own script is the
+        obvious step; the fallback covers a job that ran several steps.
+        """
+        shares = self.shares()
+        return shares.get(self.script) or next(iter(shares.values()), None)
+
+    def input_files(self) -> list[str]:
+        """Audio filenames this job consumed, from input/audio_spots.json.
+
+        Preferred over listing ``input/audio/`` because those are symlinks into
+        the spot directories, and a symlink whose target has been removed still
+        appears in a directory listing.
+        """
+        mapping = self.root / "input" / "audio_spots.json"
+        if not mapping.is_file():
+            return []
+        try:
+            data = json.loads(mapping.read_text())
+        except (OSError, json.JSONDecodeError):
+            return []
+        return sorted(data) if isinstance(data, dict) else []
+
+
+def share_url(base_url: str, share: dict | None) -> str | None:
+    """Build a browser-followable FileBrowser share link.
+
+    Returns None whenever the link would not work -- no base URL configured, no
+    share, or a share whose ``expire`` has passed. The UI then shows a filename
+    with no link, which is better than a link that 404s.
+
+    ⚠️ A live link here is NOT a promise the file still exists. The compute
+    app's retention sweeper deletes job folders and revokes their shares on its
+    own schedule, and ``mark_private`` currently leaves shares alive for up to
+    ``retention_hours`` after a project is unpublished, while these rows
+    disappear on the next index pass. So a share can outlive its row, and a row
+    can outlive its share. Re-index after retention runs to keep the two close;
+    the real fix is revoking shares at unpublish time, which is a compute-side
+    change (INDEXING-PLAN 4.3b).
+    """
+    if not base_url or not share:
+        return None
+    share_hash = share.get("hash")
+    if not share_hash:
+        return None
+    # FileBrowser stores expire as a unix timestamp, 0 or absent meaning never.
+    expire = share.get("expire")
+    if isinstance(expire, (int, float)) and expire and expire <= time.time():
+        return None
+    return f"{base_url.rstrip('/')}/share/{share_hash}"
 
 
 # Decimal places used for spot identity. 5 dp is ~1.1 m at the equator: coarse

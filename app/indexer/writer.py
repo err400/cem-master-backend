@@ -42,7 +42,7 @@ from app.models import (
 )
 
 from .rollups import SpotRollup
-from .source import POOLED_SPOT, JobRef, make_geo_key
+from .source import POOLED_SPOT, JobRef, make_geo_key, share_url
 
 
 @dataclass
@@ -456,12 +456,53 @@ def _as_datetime(value):
         return None
 
 
+def _primary_output_name(outputs: list) -> str | None:
+    """The one output file worth naming in a single-line table cell.
+
+    A step writes a CSV of results plus several PNG plots. The CSV is the
+    result; the plots are a rendering of it. So prefer a CSV, then any
+    non-image, and only fall back to an image if that is genuinely all there
+    is. Ties break on shortest name -- arbitrary but deterministic, which is
+    what matters: the same job must not name a different file on each pass.
+
+    This is a label, not a claim about which file the reader wants. The full
+    list is kept in ``job_metadata["outputs"]``, and ``output_url`` links the
+    whole directory, so nothing is hidden by choosing badly here.
+    """
+    if not outputs:
+        return None
+    names = [p.name for p in outputs]
+
+    # A run log is not a result. It was being surfaced as the output of every
+    # birdnet job, which is both wrong and a small disclosure -- pipeline logs
+    # carry absolute server paths. STAC sidecars are metadata ABOUT an output,
+    # so they lose to the file they describe.
+    substantive = [
+        n for n in names
+        if not n.endswith(".stac.json")
+        and not n.lower().endswith((".log", ".err"))
+        and not n.startswith("_")
+    ]
+    names = substantive or names
+
+    for predicate in (
+        lambda n: n.lower().endswith(".csv"),
+        lambda n: not n.lower().endswith((".png", ".jpg", ".jpeg", ".svg")),
+        lambda n: True,
+    ):
+        matches = [n for n in names if predicate(n)]
+        if matches:
+            return min(matches, key=lambda n: (len(n), n))
+    return None
+
+
 def _write_jobs(
     db: Session,
     project: str,
     jobs: list[JobRef],
     spots_by_key: dict[str, Spot],
     report: IndexReport,
+    filebrowser_url: str = "",
 ) -> None:
     """Register analysis runs, one row per (job, spot) it covered.
 
@@ -492,6 +533,33 @@ def _write_jobs(
         outputs = job.result_files()
         composite = len(spot_keys) > 1
 
+        # --- what the UI's "Analysis jobs" table shows per row ---------------
+        #
+        # The compute app already created a FileBrowser share for this step's
+        # output directory when the analysis finished, and recorded its hash in
+        # job.json. We turn that into a link; we never create or revoke one.
+        #
+        # The share points at the DIRECTORY, so the link opens the job's whole
+        # result set rather than a single file. output_file names the most
+        # useful file in it so the row is meaningful even without the link.
+        output_url = share_url(filebrowser_url, job.primary_share())
+        output_file = _primary_output_name(outputs)
+
+        # Inputs have no share of their own -- the compute app only shares
+        # results -- so input_url stays None and the input is described rather
+        # than linked. input/aggregate.csv is the detection table the run
+        # started from, which is the honest answer to "what went in".
+        consumed = job.input_files()
+        has_input_aggregate = (job.root / "input" / "aggregate.csv").is_file()
+        if has_input_aggregate and consumed:
+            input_file = f"aggregate.csv + {len(consumed)} recording(s)"
+        elif consumed:
+            input_file = f"{len(consumed)} recording(s)"
+        elif has_input_aggregate:
+            input_file = "aggregate.csv"
+        else:
+            input_file = None
+
         for spot_key in spot_keys:
             row_id = f"{job.job_id}#{spot_key}" if composite else job.job_id
             keep.add(row_id)
@@ -503,12 +571,12 @@ def _write_jobs(
                 "status": facts["status"],
                 "started_at": _as_datetime(facts["started_at"]),
                 "completed_at": _as_datetime(facts["completed_at"]),
-                # Local DATA_DIR paths must never reach the browser, so only the
-                # file NAMES are recorded here. Turning them into fetchable URLs
-                # is the artifact-serving question (INDEXING-PLAN 4.3), not this
-                # function's job.
+                # A DATA_DIR path must never reach the browser -- it is
+                # meaningless there and discloses the server's layout. Only a
+                # FileBrowser share link ever goes out, and only one the compute
+                # app already published.
                 "input_url": None,
-                "output_url": None,
+                "output_url": output_url,
                 "job_metadata": {
                     "job_id": job.job_id,
                     "project": project,
@@ -516,6 +584,12 @@ def _write_jobs(
                     "parameters": facts["params"],
                     "date_start": meta.get("start_date"),
                     "date_end": meta.get("end_date"),
+                    # The read API surfaces these two as the table's file
+                    # columns; the full lists stay here for anything that wants
+                    # detail without another round trip.
+                    "input_file": input_file,
+                    "output_file": output_file,
+                    "input_files": consumed,
                     "outputs": [p.name for p in outputs],
                     "output_count": len(outputs),
                 },
@@ -547,6 +621,7 @@ def write(
     verdicts: dict[tuple[str, str], dict] | None = None,
     indices: dict[str, dict] | None = None,
     pooled_verdicts: bool = False,
+    filebrowser_url: str = "",
 ) -> IndexReport:
     """Write one project's rollups. Caller owns the transaction.
 
@@ -602,7 +677,7 @@ def write(
         _write_migration_class(db, spot, rollup, species_by_name, verdicts, report)
         _write_indices(db, spot, rollup, indices, report)
 
-    _write_jobs(db, project, jobs, spots_by_key, report)
+    _write_jobs(db, project, jobs, spots_by_key, report, filebrowser_url)
 
     db.flush()
     return report
