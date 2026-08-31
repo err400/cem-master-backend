@@ -76,15 +76,25 @@ SPECIES = {
     "Indian Peafowl": "Pavo cristatus",
     "Common Tailorbird": "Orthotomus sutorius",
     "Hume's Warbler": "Phylloscopus humei",
+    "Egyptian Vulture": "Neophron percnopterus",
+}
+
+IUCN_LOOKUP = {
+    "Pavo cristatus": "LC",
+    "Orthotomus sutorius": "LC",
+    "Phylloscopus humei": "LC",
+    "Neophron percnopterus": "EN",
 }
 
 # (spot, filename, date, hour, common_name, confidence, min_confidence)
 DETECTIONS = [
-    # --- SPOT A, 2026-04-10, file 1 (hour 6): peafowl x3, tailorbird x1
+    # --- SPOT A, 2026-04-10, file 1 (hour 6): peafowl x3, tailorbird x1, vulture x2 (endangered, filtered out)
     ("site_a", "SPOTA_20260410_060000.wav", "2026-04-10", 6, "Indian Peafowl", 0.81, 0.25),
     ("site_a", "SPOTA_20260410_060000.wav", "2026-04-10", 6, "Indian Peafowl", 0.77, 0.25),
     ("site_a", "SPOTA_20260410_060000.wav", "2026-04-10", 6, "Indian Peafowl", 0.62, 0.25),
     ("site_a", "SPOTA_20260410_060000.wav", "2026-04-10", 6, "Common Tailorbird", 0.55, 0.25),
+    ("site_a", "SPOTA_20260410_060000.wav", "2026-04-10", 6, "Egyptian Vulture", 0.88, 0.25),
+    ("site_a", "SPOTA_20260410_060000.wav", "2026-04-10", 6, "Egyptian Vulture", 0.82, 0.25),
     # --- SPOT A, 2026-04-10, file 2 (hour 17): peafowl x2, tailorbird x1
     ("site_a", "SPOTA_20260410_170000.wav", "2026-04-10", 17, "Indian Peafowl", 0.71, 0.25),
     ("site_a", "SPOTA_20260410_170000.wav", "2026-04-10", 17, "Indian Peafowl", 0.44, 0.25),
@@ -206,6 +216,10 @@ def build(out: Path) -> Path:
         "is_public": True,
         "retention_hours": None,
     }, indent=2))
+
+    (project_root / "species_iucn_cache.json").write_text(
+        json.dumps(IUCN_LOOKUP, indent=2)
+    )
 
     # Audio files, per spot. Contents are irrelevant -- the indexer only ever
     # counts and names them -- but the directory structure must be real, because

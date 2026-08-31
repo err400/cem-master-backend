@@ -93,6 +93,7 @@ def _index_project(
         jobs = source.list_jobs(data_dir, project)
         verdicts, pooled = source.read_migratory(data_dir, project)
         indices = source.read_acoustic_indices(data_dir, project)
+        iucn_cache = source.read_species_iucn_cache(data_dir, project)
     except source.SourceError as exc:
         print(f"project {project}: SKIPPED -- {exc}", file=sys.stderr)
         return False
@@ -101,7 +102,9 @@ def _index_project(
         print(f"project {project}: no detections in dataset/aggregate.csv, nothing to index")
         return True
 
-    computed = rollups.build(detections, audio_counts=audio_counts)
+    computed = rollups.build(
+        detections, audio_counts=audio_counts, iucn_cache=iucn_cache
+    )
     report = write(
         db,
         project,

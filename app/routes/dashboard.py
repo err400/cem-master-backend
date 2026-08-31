@@ -6,6 +6,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.indexer.rollups import SENSITIVE_IUCN_CATEGORIES
 from app.models import (
     AnalysisJob,
     Species,
@@ -51,7 +52,18 @@ def list_species(
     limit: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    stmt = select(Species)
+    # Only return species with active public observations
+    active_species_ids = select(SpotSpeciesSummary.species_id).distinct()
+    stmt = select(Species).where(Species.id.in_(active_species_ids))
+
+    # Exclude sensitive/endangered categories
+    stmt = stmt.where(
+        or_(
+            Species.iucn_category.is_(None),
+            func.upper(Species.iucn_category).not_in(SENSITIVE_IUCN_CATEGORIES),
+        )
+    )
+
     if search and search.strip():
         pattern = f"%{search.strip()}%"
         stmt = stmt.where(
@@ -72,6 +84,8 @@ def list_species(
 def get_species(species_id: int, db: Session = Depends(get_db)) -> dict[str, Any]:
     species = db.get(Species, species_id)
     if species is None:
+        raise HTTPException(status_code=404, detail="Species not found")
+    if species.iucn_category and species.iucn_category.strip().upper() in SENSITIVE_IUCN_CATEGORIES:
         raise HTTPException(status_code=404, detail="Species not found")
     result = species_to_dict(species)
     result["spot_count"] = db.scalar(

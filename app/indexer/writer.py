@@ -149,10 +149,13 @@ def _upsert_species(db: Session, rollups: list[SpotRollup], report: IndexReport)
     are refreshed but never used as identity -- BirdNET's common names vary and
     two spellings of one bird must not become two species.
     """
-    wanted: dict[str, str] = {}
+    wanted: dict[str, tuple[str, str | None]] = {}
     for rollup in rollups:
         for item in rollup.species:
-            wanted.setdefault(item.scientific_name, item.common_name)
+            if item.scientific_name not in wanted:
+                wanted[item.scientific_name] = (item.common_name, item.iucn_category)
+            elif wanted[item.scientific_name][1] is None and item.iucn_category is not None:
+                wanted[item.scientific_name] = (item.common_name, item.iucn_category)
 
     if not wanted:
         return {}
@@ -164,15 +167,21 @@ def _upsert_species(db: Session, rollups: list[SpotRollup], report: IndexReport)
         ).all()
     }
 
-    for sci_name, common_name in wanted.items():
+    for sci_name, (common_name, iucn_val) in wanted.items():
         species = existing.get(sci_name)
         if species is None:
-            species = Species(scientific_name=sci_name, common_name=common_name)
+            species = Species(
+                scientific_name=sci_name,
+                common_name=common_name,
+                iucn_category=iucn_val,
+            )
             db.add(species)
             existing[sci_name] = species
             report.species_created += 1
         else:
             species.common_name = common_name
+            if iucn_val is not None:
+                species.iucn_category = iucn_val
 
     db.flush()
     return existing
