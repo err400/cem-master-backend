@@ -98,10 +98,6 @@ def get_spot_summary(spot_id: int, db: Session = Depends(get_db)) -> dict[str, A
         .where(SpotSpeciesSummary.spot_id == spot_id)
         .order_by(SpotSpeciesSummary.detection_count.desc())
     ).all()
-    threatened_categories = {"VU", "EN", "CR", "Vulnerable", "Endangered", "Critically Endangered"}
-    threatened_richness = sum(
-        1 for _, species in inventory_rows if species.iucn_category in threatened_categories
-    )
     job_count = db.scalar(
         select(func.count()).select_from(AnalysisJob).where(AnalysisJob.spot_id == spot_id)
     ) or 0
@@ -117,7 +113,6 @@ def get_spot_summary(spot_id: int, db: Session = Depends(get_db)) -> dict[str, A
         },
         "summary": {
             "species_richness": summary.species_richness if summary else len(inventory_rows),
-            "threatened_species_richness": threatened_richness,
             "total_detections": summary.total_detections if summary else sum(row.detection_count for row, _ in inventory_rows),
             "recording_count": summary.recording_count if summary else 0,
             "active_days": summary.active_days if summary else 0,
