@@ -369,6 +369,27 @@ def read_processed_files(data_dir: Path, project: str) -> set[str]:
     }
 
 
+def read_species_iucn_cache(data_dir: Path, project: str) -> dict[str, str]:
+    """Read project-level species IUCN cache (mapping scientific_name -> iucn_category).
+
+    Returns an empty dict if the file is absent.
+    """
+    cache_path = project_root(data_dir, project) / "species_iucn_cache.json"
+    if not cache_path.is_file():
+        return {}
+    try:
+        data = json.loads(cache_path.read_text())
+        if isinstance(data, dict):
+            return {
+                str(k).strip(): str(v).strip().upper()
+                for k, v in data.items()
+                if k and v
+            }
+        return {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
 _RESERVED_DIRS = {"dataset", ".git", "__pycache__"}
 
 

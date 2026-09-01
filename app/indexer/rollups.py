@@ -50,6 +50,7 @@ class SpotSpeciesRollup:
     hourly_counts: list[int]
     daily_counts: list[dict]
     monthly_counts: list[dict]
+    iucn_category: str | None = None
 
 
 @dataclass
@@ -73,8 +74,21 @@ class SpotRollup:
     label_variants: list[str] = field(default_factory=list)
 
 
-def prepare(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalise raw aggregate rows before any grouping.
+# Categories to completely exclude from public catalogue (Endangered and Extinct):
+SENSITIVE_IUCN_CATEGORIES = frozenset({
+    "EX",  # Extinct
+    "EW",  # Extinct in the Wild
+    "CR",  # Critically Endangered
+    "EN",  # Endangered
+    "EXTINCT",
+    "EXTINCT IN THE WILD",
+    "CRITICALLY ENDANGERED",
+    "ENDANGERED",
+})
+
+
+def prepare(df: pd.DataFrame, iucn_cache: dict[str, str] | None = None) -> pd.DataFrame:
+    """Normalise raw aggregate rows, resolve IUCN categories, and drop sensitive species.
 
     Deliberately strict about dropping unusable rows rather than coercing them:
     a detection with no date or no species cannot be attributed to anything, and
@@ -89,6 +103,19 @@ def prepare(df: pd.DataFrame) -> pd.DataFrame:
     out["observation_date"] = pd.to_datetime(out["date"], errors="coerce").dt.date
     out["confidence"] = pd.to_numeric(out["confidence"], errors="coerce")
     out["hour"] = pd.to_numeric(out["hour"], errors="coerce")
+
+    # 1. Resolve IUCN category from cache if column is absent or contains missing values
+    if iucn_cache:
+        if "iucn_category" not in out.columns:
+            out["iucn_category"] = out["scientific_name"].map(iucn_cache)
+        else:
+            out["iucn_category"] = out["iucn_category"].fillna(out["scientific_name"].map(iucn_cache))
+
+    # 2. Filter out Endangered / Extinct species before any grouping/rollups
+    if "iucn_category" in out.columns:
+        normalized_cat = out["iucn_category"].astype(str).str.strip().str.upper()
+        is_sensitive = normalized_cat.isin(SENSITIVE_IUCN_CATEGORIES)
+        out = out[~is_sensitive]
 
     out = out[
         out["spot_key"].astype(bool)
@@ -162,10 +189,14 @@ def _confidence_floor(group: pd.DataFrame) -> tuple[float | None, bool]:
     return float(known.max()), heterogeneous
 
 
-def build(df: pd.DataFrame, audio_counts: dict[str, int] | None = None) -> list[SpotRollup]:
+def build(
+    df: pd.DataFrame,
+    audio_counts: dict[str, int] | None = None,
+    iucn_cache: dict[str, str] | None = None,
+) -> list[SpotRollup]:
     """Compute every rollup for one project's detections."""
     audio_counts = audio_counts or {}
-    prepared = prepare(df)
+    prepared = prepare(df, iucn_cache=iucn_cache)
     if prepared.empty:
         return []
 
@@ -178,6 +209,11 @@ def build(df: pd.DataFrame, audio_counts: dict[str, int] | None = None) -> list[
         daily: list[DailyRollup] = []
 
         for sci_name, sp_rows in spot_rows.groupby("scientific_name", sort=True):
+            iucn_category = (
+                str(sp_rows["iucn_category"].dropna().iloc[0]).strip()
+                if "iucn_category" in sp_rows.columns and not sp_rows["iucn_category"].dropna().empty
+                else None
+            )
             per_species.append(
                 SpotSpeciesRollup(
                     spot_key=spot_key,
@@ -195,6 +231,7 @@ def build(df: pd.DataFrame, audio_counts: dict[str, int] | None = None) -> list[
                     hourly_counts=_hourly(sp_rows),
                     daily_counts=_daily_pairs(sp_rows),
                     monthly_counts=_monthly_pairs(sp_rows),
+                    iucn_category=iucn_category,
                 )
             )
             for d, n in sp_rows.groupby("observation_date").size().sort_index().items():

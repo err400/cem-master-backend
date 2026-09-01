@@ -342,3 +342,60 @@ def test_duplicate_detections_are_deduplicated() -> None:
 
 def test_empty_input_produces_nothing() -> None:
     assert rollups.build(pd.DataFrame()) == []
+
+
+def test_endangered_and_extinct_species_are_excluded() -> None:
+    """CR, EN, EW, EX species must never be indexed into the public catalogue."""
+    df = pd.DataFrame([
+        {
+            "spot": "site_a", "date": "2026-04-10", "hour": 6,
+            "scientific_name": "Pavo cristatus", "common_name": "Indian Peafowl",
+            "confidence": 0.85, "filename": "a.wav", "iucn_category": "LC",
+        },
+        {
+            "spot": "site_a", "date": "2026-04-10", "hour": 6,
+            "scientific_name": "Neophron percnopterus", "common_name": "Egyptian Vulture",
+            "confidence": 0.90, "filename": "b.wav", "iucn_category": "EN",
+        },
+        {
+            "spot": "site_a", "date": "2026-04-10", "hour": 7,
+            "scientific_name": "Gyps bengalensis", "common_name": "White-rumped Vulture",
+            "confidence": 0.92, "filename": "c.wav", "iucn_category": "CR",
+        },
+        {
+            "spot": "site_a", "date": "2026-04-10", "hour": 8,
+            "scientific_name": "Raphus cucullatus", "common_name": "Dodo",
+            "confidence": 0.95, "filename": "d.wav", "iucn_category": "EX",
+        },
+    ])
+    built = rollups.build(df)
+    assert len(built) == 1
+    assert built[0].total_detections == 1
+    assert built[0].species[0].scientific_name == "Pavo cristatus"
+    assert built[0].species[0].iucn_category == "LC"
+
+
+def test_iucn_cache_resolution_and_filter() -> None:
+    """species_iucn_cache resolves missing columns and drops endangered species."""
+    df = pd.DataFrame([
+        {
+            "spot": "site_a", "date": "2026-04-10", "hour": 6,
+            "scientific_name": "Pavo cristatus", "common_name": "Indian Peafowl",
+            "confidence": 0.85, "filename": "a.wav",
+        },
+        {
+            "spot": "site_a", "date": "2026-04-10", "hour": 7,
+            "scientific_name": "Neophron percnopterus", "common_name": "Egyptian Vulture",
+            "confidence": 0.90, "filename": "b.wav",
+        },
+    ])
+    cache = {
+        "Pavo cristatus": "LC",
+        "Neophron percnopterus": "EN",
+    }
+    built = rollups.build(df, iucn_cache=cache)
+    assert len(built) == 1
+    assert built[0].total_detections == 1
+    assert built[0].species[0].scientific_name == "Pavo cristatus"
+    assert built[0].species[0].iucn_category == "LC"
+

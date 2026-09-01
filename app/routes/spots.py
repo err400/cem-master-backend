@@ -95,16 +95,6 @@ def list_spots(
         feature["properties"]["species_count"] = db.scalar(
             select(func.count()).select_from(SpotSpeciesSummary).where(SpotSpeciesSummary.spot_id == spot.id)
         ) or 0
-        threatened_categories = ("VU", "EN", "CR", "Vulnerable", "Endangered", "Critically Endangered")
-        feature["properties"]["threatened_species_richness"] = db.scalar(
-            select(func.count())
-            .select_from(SpotSpeciesSummary)
-            .join(Species, Species.id == SpotSpeciesSummary.species_id)
-            .where(
-                SpotSpeciesSummary.spot_id == spot.id,
-                Species.iucn_category.in_(threatened_categories),
-            )
-        ) or 0
 
         if species_id is not None:
             if start_date or end_date:
@@ -139,12 +129,12 @@ def list_spots(
     else:
         ranked = sorted(
             features,
-            key=lambda item: item["properties"]["threatened_species_richness"],
+            key=lambda item: item["properties"]["species_count"],
             reverse=True,
         )
         ranks = {item["properties"]["id"]: rank for rank, item in enumerate(ranked, start=1)}
         for feature in features:
-            feature["properties"]["threatened_rank"] = ranks[feature["properties"]["id"]]
+            feature["properties"]["activity_rank"] = ranks[feature["properties"]["id"]]
     return {
         "type": "FeatureCollection",
         "features": features,

@@ -2,11 +2,12 @@ import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.database import SessionLocal
+from app.indexer.rollups import SENSITIVE_IUCN_CATEGORIES
 from app.models import (
     AnalysisJob,
     Species,
@@ -218,8 +219,14 @@ def main() -> None:
                     source_spot_id=spot_data["source_spot_id"],
                 ))
 
+        # Apply the indexer's privacy/conservation filter dynamically
+        allowed_species_data = [
+            s for s in SAMPLE_SPECIES
+            if str(s.get("iucn_category") or "").strip().upper() not in SENSITIVE_IUCN_CATEGORIES
+        ]
+
         species_by_name: dict[str, Species] = {}
-        for species_data in SAMPLE_SPECIES:
+        for species_data in allowed_species_data:
             species = db.scalar(select(Species).where(
                 Species.scientific_name == species_data["scientific_name"]
             ))
@@ -236,12 +243,16 @@ def main() -> None:
                 species.network_metrics = species_data["network_metrics"]
             species_by_name[species.common_name] = species
 
+        allowed_associations = [
+            a for a in ASSOCIATIONS if a[1] in species_by_name
+        ]
+
         associations_by_spot: dict[str, list[tuple]] = {}
-        for association in ASSOCIATIONS:
+        for association in allowed_associations:
             associations_by_spot.setdefault(association[0], []).append(association)
 
         for source_spot_id, spot in spots_by_source.items():
-            local_associations = associations_by_spot[source_spot_id]
+            local_associations = associations_by_spot.get(source_spot_id, [])
             values = {
                 "recording_count": 900 + (int(source_spot_id[-1]) * 125),
                 "species_richness": len(local_associations),
@@ -260,7 +271,7 @@ def main() -> None:
                 for key, value in values.items():
                     setattr(summary, key, value)
 
-        for source_spot_id, common_name, count, days, avg_conf, max_conf, regularity in ASSOCIATIONS:
+        for source_spot_id, common_name, count, days, avg_conf, max_conf, regularity in allowed_associations:
             spot = spots_by_source[source_spot_id]
             species = species_by_name[common_name]
             hourly = [round(count * weight / 100) for weight in HOURLY_WEIGHTS]
@@ -360,6 +371,22 @@ def main() -> None:
             else:
                 for key, value in job_values.items():
                     setattr(job, key, value)
+
+        # Purge stale/sensitive species (e.g. Egyptian Vulture) from sample spots
+        allowed_species_ids = {s.id for s in species_by_name.values()}
+        for spot in spots_by_source.values():
+            db.execute(
+                delete(SpotSpeciesSummary).where(
+                    SpotSpeciesSummary.spot_id == spot.id,
+                    SpotSpeciesSummary.species_id.not_in(allowed_species_ids),
+                )
+            )
+            db.execute(
+                delete(SpotSpeciesDaily).where(
+                    SpotSpeciesDaily.spot_id == spot.id,
+                    SpotSpeciesDaily.species_id.not_in(allowed_species_ids),
+                )
+            )
 
         db.commit()
 
