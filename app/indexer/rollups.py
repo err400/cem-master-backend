@@ -74,8 +74,9 @@ class SpotRollup:
     label_variants: list[str] = field(default_factory=list)
 
 
-# Categories to completely exclude from public catalogue (Endangered and Extinct):
+# Categories to completely exclude from public catalogue (Endangered, Extinct, or Unrecognised/Unknown - Fail Closed):
 SENSITIVE_IUCN_CATEGORIES = frozenset({
+    # Extinct & Endangered
     "EX",  # Extinct
     "EW",  # Extinct in the Wild
     "CR",  # Critically Endangered
@@ -84,6 +85,17 @@ SENSITIVE_IUCN_CATEGORIES = frozenset({
     "EXTINCT IN THE WILD",
     "CRITICALLY ENDANGERED",
     "ENDANGERED",
+    # Fail-closed: Withhold unrecognised, unknown, unassigned, or data deficient species
+    "UNKNOWN",
+    "UNASSIGNED",
+    "NOT EVALUATED",
+    "NE",
+    "DD",
+    "DATA DEFICIENT",
+    "",
+    "NONE",
+    "NAN",
+    "NULL",
 })
 
 
@@ -111,9 +123,15 @@ def prepare(df: pd.DataFrame, iucn_cache: dict[str, str] | None = None) -> pd.Da
         else:
             out["iucn_category"] = out["iucn_category"].fillna(out["scientific_name"].map(iucn_cache))
 
-    # 2. Filter out Endangered / Extinct species before any grouping/rollups
+    # 2. Filter out Endangered / Extinct / Unknown species before any grouping/rollups (Fail Closed)
     if "iucn_category" in out.columns:
-        normalized_cat = out["iucn_category"].astype(str).str.strip().str.upper()
+        normalized_cat = (
+            out["iucn_category"]
+            .fillna("UNKNOWN")
+            .astype(str)
+            .str.strip()
+            .str.upper()
+        )
         is_sensitive = normalized_cat.isin(SENSITIVE_IUCN_CATEGORIES)
         out = out[~is_sensitive]
 
