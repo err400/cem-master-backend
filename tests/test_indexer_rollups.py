@@ -399,3 +399,37 @@ def test_iucn_cache_resolution_and_filter() -> None:
     assert built[0].species[0].scientific_name == "Pavo cristatus"
     assert built[0].species[0].iucn_category == "LC"
 
+
+def test_unknown_and_lookup_misses_fail_closed() -> None:
+    """Unknown species and cache lookup misses must be withheld (fail closed)."""
+    df = pd.DataFrame([
+        {
+            "spot": "site_a", "date": "2026-04-10", "hour": 6,
+            "scientific_name": "Pavo cristatus", "common_name": "Indian Peafowl",
+            "confidence": 0.85, "filename": "a.wav", "iucn_category": "LC",
+        },
+        {
+            "spot": "site_a", "date": "2026-04-10", "hour": 6,
+            "scientific_name": "Mysterious bird", "common_name": "Mystery Bird",
+            "confidence": 0.70, "filename": "b.wav", "iucn_category": "Unknown",
+        },
+        {
+            "spot": "site_a", "date": "2026-04-10", "hour": 6,
+            "scientific_name": "Empty category bird", "common_name": "Empty Bird",
+            "confidence": 0.60, "filename": "c.wav", "iucn_category": "",
+        },
+        {
+            "spot": "site_a", "date": "2026-04-10", "hour": 6,
+            "scientific_name": "Uncached bird", "common_name": "Uncached Bird",
+            "confidence": 0.65, "filename": "d.wav",
+        },
+    ])
+    # Cache only has Pavo cristatus; other birds have lookup misses or 'Unknown'
+    cache = {"Pavo cristatus": "LC"}
+    built = rollups.build(df, iucn_cache=cache)
+    assert len(built) == 1
+    assert built[0].total_detections == 1
+    assert built[0].species[0].scientific_name == "Pavo cristatus"
+    assert built[0].species[0].iucn_category == "LC"
+
+
