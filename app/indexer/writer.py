@@ -196,72 +196,22 @@ def _upsert_spot(
 ) -> Spot | None:
     """Ensure a Spot row exists for this project's spot.
 
-    Returns None when no coordinates can be found. That is not an error -- a spot
-    only gets coordinates once an analysis job has run and written geo.json, and
-    those folders are swept after 7 days -- but such a spot cannot be placed on a
-    map, so it is reported rather than invented at 0,0.
+    Spots are scoped to projects. Every project owns its own spots even if multiple
+    projects have spots geotagged at the exact same physical coordinates.
     """
     position = coords.get(rollup.spot_key)
     geo_key = make_geo_key(*position) if position else None
 
-    # 1. By the name this project used. spot_sources holds every name a spot has
-    #    been known by, so a spot renamed on a previous pass still resolves from
-    #    its old detections.
-    source_row = db.scalar(
-        select(SpotSource).where(
-            SpotSource.source_project_id == project,
-            SpotSource.source_spot_id == rollup.spot_key,
+    # Resolve spot strictly within THIS project
+    spot = db.scalar(
+        select(Spot).where(
+            Spot.source_project_id == project,
+            Spot.source_spot_id == rollup.spot_key,
         )
     )
-    spot = db.get(Spot, source_row.spot_id) if source_row else None
-
-    # 2. By physical location. This is what makes a rename a rename: the name
-    #    changed but the recorder did not move, so the key is unchanged.
-    if spot is None and geo_key is not None:
-        spot = db.scalar(select(Spot).where(Spot.geo_key == geo_key))
-
-        if spot is not None and spot.source_project_id != project:
-            # A different project already holds this location. The schema's
-            # intent is that they share one canonical spot, attaching through
-            # spot_sources -- but the rollup tables are keyed on spot_id alone,
-            # so two projects sharing a spot would overwrite each other's
-            # totals and whichever indexed last would win. That needs
-            # source_project_id on the rollups (INDEXING-PLAN 6.6b), which is a
-            # migration rather than a patch here.
-            report.warnings.append(
-                f"{rollup.spot_key}: location {geo_key} is already held by "
-                f"project {spot.source_project_id!r} (spot "
-                f"{spot.source_spot_id!r}). Two projects at one place need the "
-                "rollup tables keyed by source_project_id first "
-                "(INDEXING-PLAN 6.6b); skipping this spot."
-            )
-            return None
-
-        if spot is not None:
-            # Same project, same place, different name -- a rename. Record the
-            # new name as another source so future passes resolve it by name
-            # directly, and so the old name keeps resolving too: historical
-            # detections still carry it.
-            report.warnings.append(
-                f"{rollup.spot_key}: same location as existing spot "
-                f"{spot.source_spot_id!r}, treated as a rename rather than a new "
-                "spot. Both names now resolve to it."
-            )
-            db.add(
-                SpotSource(
-                    spot_id=spot.id,
-                    source_project_id=project,
-                    source_spot_id=rollup.spot_key,
-                )
-            )
-            report.spot_aliases_added += 1
 
     if spot is None:
         if position is None:
-            # No coordinates anywhere: geo.json was never written, or the job
-            # folder holding it has been swept (retention, ~7 days). Reported
-            # rather than invented at 0,0 -- a fabricated position on a public
-            # ecological map is worse than an absent one.
             report.spots_without_coordinates.append(rollup.spot_key)
             return None
 
@@ -286,9 +236,6 @@ def _upsert_spot(
         )
     else:
         spot.name = rollup.spot_label
-        # Only overwrite coordinates when we actually have some. Once captured,
-        # the database is the durable record; a later pass finding no geo.json
-        # because retention swept it must not blank them.
         if position is not None:
             spot.latitude, spot.longitude = position
             spot.geo_key = geo_key

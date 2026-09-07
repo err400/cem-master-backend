@@ -115,10 +115,17 @@ def get_spot_summary(spot_id: int, db: Session = Depends(get_db)) -> dict[str, A
     job_count = db.scalar(
         select(func.count()).select_from(AnalysisJob).where(AnalysisJob.spot_id == spot_id)
     ) or 0
+    spot_hourly_counts = [0] * 24
+    for item, _ in inventory_rows:
+        counts = item.hourly_counts or []
+        for hour in range(min(24, len(counts))):
+            spot_hourly_counts[hour] += int(counts[hour] or 0)
 
     return {
         "spot": {
             "id": spot.id,
+            "source_project_id": spot.source_project_id,
+            "source_spot_id": spot.source_spot_id,
             "name": spot.name,
             "description": spot.description,
             "latitude": spot.latitude,
@@ -136,6 +143,7 @@ def get_spot_summary(spot_id: int, db: Session = Depends(get_db)) -> dict[str, A
             "first_recording_date": summary.first_recording_date if summary else None,
             "last_recording_date": summary.last_recording_date if summary else None,
             "acoustic_indices": summary.acoustic_indices if summary else {},
+            "hourly_counts": spot_hourly_counts,
             "analysis_assets": (summary.analysis_assets or []) if summary else [],
         },
         "top_species": [
@@ -160,6 +168,7 @@ def get_spot_summary(spot_id: int, db: Session = Depends(get_db)) -> dict[str, A
                 "first_occurrence": item.first_detection_date,
                 "last_occurrence": item.last_detection_date,
                 "monthly_counts": item.monthly_counts or [],
+                "hourly_counts": item.hourly_counts or [],
             }
             for item, species in inventory_rows
         ],

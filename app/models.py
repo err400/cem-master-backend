@@ -15,10 +15,7 @@ class Spot(Base):
     __tablename__ = "spots"
     __table_args__ = (
         UniqueConstraint("source_project_id", "source_spot_id", name="uq_source_project_spot"),
-        # Replaces UniqueConstraint("latitude", "longitude"). Exact float equality
-        # made two GPS readings of the same tree, differing in the 7th decimal,
-        # into two separate map markers. geo_key rounds to ~1.1 m first.
-        UniqueConstraint("geo_key", name="uq_spot_geo_key"),
+        Index("ix_spot_geo_key", "geo_key"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)

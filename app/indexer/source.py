@@ -527,10 +527,10 @@ POOLED_SPOT = "*"
 def read_acoustic_indices(data_dir: Path, project: str) -> dict[str, dict]:
     """Soundscape indices per normalised spot name.
 
-    The step writes one row per spot with columns like ACI/ADI/AEI/NDSI. Column
-    names are passed through as-is rather than being mapped to a fixed list --
-    the frontend renders whatever keys it receives, so a new index appearing in
-    the pipeline shows up without a change here.
+    Extracts ecological soundscape indices (ACI, ADI, AEI, NDSI, BI, MFC, CLS, H)
+    from pipeline CSV outputs, supporting both:
+    1. Long-format stats files (columns: Spot, Index, Mean/Value/Median)
+    2. Wide-format aggregate files (columns: Spot, ACI, ADI, AEI, NDSI, ...)
     """
     indices: dict[str, dict] = {}
     for job in list_jobs(data_dir, project):  # oldest first, later jobs win
@@ -542,17 +542,38 @@ def read_acoustic_indices(data_dir: Path, project: str) -> dict[str, dict]:
                 frame = pd.read_csv(csv_path)
             except Exception:
                 continue
-            if "Spot" not in frame.columns:
+            spot_col = next((c for c in frame.columns if c.lower() == "spot"), None)
+            if not spot_col:
                 continue
-            for row in frame.to_dict("records"):
-                spot_key = normalise_spot(row.pop("Spot"))
-                values = {
-                    k: float(v)
-                    for k, v in row.items()
-                    if isinstance(v, (int, float)) and pd.notna(v)
-                }
-                if values:
-                    indices[spot_key] = values
+
+            # 1. Long format: (Spot, Index, Mean/Value/Median)
+            idx_col = next((c for c in frame.columns if c.lower() == "index"), None)
+            val_col = next(
+                (c for c in ("Mean", "mean", "Value", "value", "Median", "median") if c in frame.columns),
+                None,
+            )
+            if idx_col and val_col:
+                for _, row in frame.iterrows():
+                    sk = normalise_spot(row[spot_col])
+                    ik = str(row[idx_col]).strip()
+                    val = pd.to_numeric(row[val_col], errors="coerce")
+                    if pd.notna(val) and ik:
+                        indices.setdefault(sk, {})[ik] = round(float(val), 4)
+                continue
+
+            # 2. Wide format with named eco-index columns
+            eco_cols = [
+                c for c in frame.columns
+                if c.upper() in {"ACI", "ADI", "AEI", "NDSI", "BI", "BIO", "MFC", "CLS", "H"}
+            ]
+            if eco_cols:
+                means = frame.groupby(spot_col)[eco_cols].mean()
+                for spot_val, row in means.iterrows():
+                    sk = normalise_spot(spot_val)
+                    for c in eco_cols:
+                        if pd.notna(row[c]):
+                            indices.setdefault(sk, {})[c] = round(float(row[c]), 4)
+
     return indices
 
 
