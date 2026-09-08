@@ -26,12 +26,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+import hashlib
+from pathlib import Path
+import wave
 
+import pandas as pd
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.models import (
     AnalysisJob,
+    AudioRecording,
+    BirdOccurrence,
     Species,
     Spot,
     SpotEnvironmentDaily,
@@ -41,8 +47,9 @@ from app.models import (
     SpotSummary,
 )
 
+from . import rollups as rollup_mod
 from .rollups import SpotRollup
-from .source import POOLED_SPOT, JobRef, make_geo_key, share_url
+from .source import POOLED_SPOT, JobRef, make_geo_key, normalise_spot, share_url
 
 
 @dataclass
@@ -57,6 +64,10 @@ class IndexReport:
     daily_rows_written: int = 0
     species_rows_deleted: int = 0
     daily_rows_deleted: int = 0
+    recordings_written: int = 0
+    occurrences_written: int = 0
+    occurrences_deleted: int = 0
+    recordings_deleted: int = 0
     jobs_written: int = 0
     jobs_deleted: int = 0
     migration_classes_set: int = 0
@@ -74,6 +85,10 @@ class IndexReport:
             f"{self.species_rows_deleted} stale removed",
             f"  daily rows       {self.daily_rows_written} written, "
             f"{self.daily_rows_deleted} stale removed",
+            f"  recordings       {self.recordings_written} written, "
+            f"{self.recordings_deleted} stale removed",
+            f"  occurrences      {self.occurrences_written} written, "
+            f"{self.occurrences_deleted} stale removed",
             f"  analysis jobs    {self.jobs_written} written, "
             f"{self.jobs_deleted} stale removed",
             f"  migration class  {self.migration_classes_set} set",
@@ -114,6 +129,8 @@ def prune_project(db: Session, project: str) -> int:
 
     ids = sorted(spot_ids)
     db.execute(delete(AnalysisJob).where(AnalysisJob.spot_id.in_(ids)))
+    db.execute(delete(BirdOccurrence).where(BirdOccurrence.spot_id.in_(ids)))
+    db.execute(delete(AudioRecording).where(AudioRecording.spot_id.in_(ids)))
     db.execute(delete(SpotSpeciesDaily).where(SpotSpeciesDaily.spot_id.in_(ids)))
     db.execute(delete(SpotSpeciesSummary).where(SpotSpeciesSummary.spot_id.in_(ids)))
     db.execute(delete(SpotSummary).where(SpotSummary.spot_id.in_(ids)))
@@ -412,6 +429,179 @@ def _as_datetime(value):
         return None
 
 
+def _clean_filename(value) -> str:
+    return Path(str(value or "")).name.strip()
+
+
+def _nullable_float(value) -> float | None:
+    try:
+        if value is None or pd.isna(value):
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _nullable_int(value) -> int | None:
+    try:
+        if value is None or pd.isna(value):
+            return None
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _relative_audio_path(project: str, source_spot_id: str, filename: str) -> str:
+    return f"projects/{project}/{source_spot_id}/audio/{filename}"
+
+
+def _make_audio_id(project: str, source_spot_id: str, filename: str) -> str:
+    payload = "\0".join([str(project).strip(), str(source_spot_id).strip(), Path(str(filename)).name])
+    return "aud_" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
+
+
+def _source_audio_id(project: str, source_spot_id: str, filename: str, row) -> str:
+    value = row.get("audio_id", "")
+    existing = "" if pd.isna(value) else str(value or "").strip()
+    if existing:
+        return existing
+    return _make_audio_id(project, source_spot_id, filename)
+
+
+def _find_audio_file(
+    data_dir: Path | None,
+    project: str,
+    source_spot_id: str,
+    filename: str,
+) -> Path | None:
+    if data_dir is None:
+        return None
+    project_root = data_dir / "projects" / project
+    direct = project_root / source_spot_id / "audio" / filename
+    if direct.is_file():
+        return direct
+    if not project_root.is_dir():
+        return None
+    for child in project_root.iterdir():
+        candidate = child / "audio" / filename
+        if child.is_dir() and normalise_spot(child.name) == source_spot_id and candidate.is_file():
+            return candidate
+    return None
+
+
+def _wav_metadata(path: Path | None) -> tuple[float | None, int | None]:
+    if path is None or path.suffix.lower() != ".wav":
+        return None, None
+    try:
+        with wave.open(str(path), "rb") as audio:
+            frames = audio.getnframes()
+            rate = audio.getframerate()
+            duration = round(frames / rate, 3) if rate else None
+            return duration, rate
+    except (OSError, EOFError, wave.Error):
+        return None, None
+
+
+def _write_recordings(
+    db: Session,
+    project: str,
+    detections: pd.DataFrame | None,
+    spots_by_key: dict[str, Spot],
+    species_by_name: dict[str, Species],
+    report: IndexReport,
+    iucn_cache: dict[str, str] | None = None,
+    data_dir: Path | None = None,
+) -> None:
+    if detections is None or detections.empty:
+        return
+
+    public_rows = rollup_mod.prepare(detections, iucn_cache=iucn_cache)
+    project_recordings = select(AudioRecording.id).where(AudioRecording.source_project_id == project)
+    report.occurrences_deleted += (
+        db.execute(
+            delete(BirdOccurrence).where(BirdOccurrence.audio_recording_id.in_(project_recordings))
+            .execution_options(synchronize_session=False)
+        ).rowcount
+        or 0
+    )
+
+    if public_rows.empty:
+        report.recordings_deleted += (
+            db.execute(
+                delete(AudioRecording).where(AudioRecording.source_project_id == project)
+                .execution_options(synchronize_session=False)
+            ).rowcount
+            or 0
+        )
+        return
+
+    existing = {
+        (row.source_spot_id, row.filename): row
+        for row in db.scalars(
+            select(AudioRecording).where(AudioRecording.source_project_id == project)
+        ).all()
+    }
+    keep_recording_ids: set[int] = set()
+
+    grouped = public_rows.groupby(["spot_key", "filename"], sort=True, dropna=True)
+    for (spot_key, raw_filename), rows in grouped:
+        spot = spots_by_key.get(str(spot_key))
+        filename = _clean_filename(raw_filename)
+        if spot is None or not filename:
+            continue
+
+        first = rows.iloc[0]
+        path = _find_audio_file(data_dir, project, str(spot_key), filename)
+        duration, sample_rate = _wav_metadata(path)
+        values = {
+            "source_audio_id": _source_audio_id(project, str(spot_key), filename, first),
+            "spot_id": spot.id,
+            "source_project_id": project,
+            "source_spot_id": str(spot_key),
+            "filename": filename,
+            "relative_path": _relative_audio_path(project, str(spot_key), filename),
+            "recorded_date": first.get("observation_date"),
+            "hour": _nullable_int(first.get("hour")),
+            "minute": _nullable_int(first.get("minute")),
+            "second": _nullable_int(first.get("second")),
+            "duration_seconds": duration,
+            "sample_rate": sample_rate,
+        }
+        recording = existing.get((str(spot_key), filename))
+        if recording is None:
+            recording = AudioRecording(**values)
+            db.add(recording)
+            db.flush()
+        else:
+            for key, value in values.items():
+                setattr(recording, key, value)
+        keep_recording_ids.add(recording.id)
+        report.recordings_written += 1
+
+        for _, detection in rows.iterrows():
+            species = species_by_name.get(str(detection.get("scientific_name")))
+            if species is None:
+                continue
+            db.add(
+                BirdOccurrence(
+                    audio_recording_id=recording.id,
+                    spot_id=spot.id,
+                    species_id=species.id,
+                    confidence=_nullable_float(detection.get("confidence")),
+                    start_time_seconds=_nullable_float(detection.get("start_time")),
+                    end_time_seconds=_nullable_float(detection.get("end_time")),
+                )
+            )
+            report.occurrences_written += 1
+
+    stale = delete(AudioRecording).where(AudioRecording.source_project_id == project)
+    if keep_recording_ids:
+        stale = stale.where(AudioRecording.id.not_in(keep_recording_ids))
+    report.recordings_deleted += db.execute(
+        stale.execution_options(synchronize_session=False)
+    ).rowcount or 0
+
+
 def _primary_output_name(outputs: list) -> str | None:
     """The one output file worth naming in a single-line table cell.
 
@@ -573,6 +763,9 @@ def write(
     project: str,
     rollups: list[SpotRollup],
     coords: dict[str, tuple[float, float]],
+    detections: pd.DataFrame | None = None,
+    iucn_cache: dict[str, str] | None = None,
+    data_dir: Path | None = None,
     jobs: list[JobRef] | None = None,
     verdicts: dict[tuple[str, str], dict] | None = None,
     indices: dict[str, dict] | None = None,
@@ -633,6 +826,16 @@ def write(
         _write_migration_class(db, spot, rollup, species_by_name, verdicts, report)
         _write_indices(db, spot, rollup, indices, report)
 
+    _write_recordings(
+        db,
+        project,
+        detections,
+        spots_by_key,
+        species_by_name,
+        report,
+        iucn_cache=iucn_cache,
+        data_dir=data_dir,
+    )
     _write_jobs(db, project, jobs, spots_by_key, report, filebrowser_url)
 
     db.flush()

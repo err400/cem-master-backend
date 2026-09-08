@@ -141,6 +141,59 @@ class SpotSpeciesDaily(Base):
     detection_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
+class AudioRecording(Base):
+    __tablename__ = "audio_recordings"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_audio_id",
+            name="uq_audio_recordings_source_audio_id",
+        ),
+        UniqueConstraint(
+            "source_project_id",
+            "source_spot_id",
+            "filename",
+            name="uq_audio_recording_source_file",
+        ),
+        Index("ix_audio_recordings_spot_date", "spot_id", "recorded_date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_audio_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    spot_id: Mapped[int] = mapped_column(ForeignKey("spots.id", ondelete="CASCADE"), index=True)
+    source_project_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    source_spot_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    filename: Mapped[str] = mapped_column(String(260), nullable=False)
+    relative_path: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    hour: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    minute: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    second: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sample_rate: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+
+class BirdOccurrence(Base):
+    __tablename__ = "bird_occurrences"
+    __table_args__ = (
+        Index("ix_bird_occurrences_species_spot", "species_id", "spot_id"),
+        Index("ix_bird_occurrences_recording_species", "audio_recording_id", "species_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    audio_recording_id: Mapped[int] = mapped_column(
+        ForeignKey("audio_recordings.id", ondelete="CASCADE"), index=True
+    )
+    spot_id: Mapped[int] = mapped_column(ForeignKey("spots.id", ondelete="CASCADE"), index=True)
+    species_id: Mapped[int] = mapped_column(ForeignKey("species.id", ondelete="CASCADE"), index=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    start_time_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    end_time_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
 class AnalysisJob(Base):
     """Public provenance for a bioacoustic analysis run.
 

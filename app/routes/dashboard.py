@@ -1,14 +1,21 @@
 from datetime import date
+import mimetypes
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
+from app.config import Settings, get_settings
 from app.database import get_db
+from app.indexer.source import normalise_spot
 from app.indexer.rollups import SENSITIVE_IUCN_CATEGORIES
 from app.models import (
     AnalysisJob,
+    AudioRecording,
+    BirdOccurrence,
     Species,
     Spot,
     SpotEnvironmentDaily,
@@ -31,6 +38,10 @@ def public_iucn_clause():
 
 def is_public_species(species: Species) -> bool:
     return bool(species.iucn_category) and species.iucn_category.strip().upper() not in SENSITIVE_IUCN_CATEGORIES
+
+
+def recording_stream_url(audio_id: str) -> str:
+    return f"/api/v1/recordings/{audio_id}/stream"
 
 
 def species_to_dict(species: Species) -> dict[str, Any]:
@@ -100,6 +111,250 @@ def get_species(species_id: int, db: Session = Depends(get_db)) -> dict[str, Any
         )
     ) or 0
     return result
+
+
+def recording_to_dict(
+    recording: AudioRecording,
+    detection_count: int,
+    max_confidence: float | None,
+    first_start: float | None,
+    last_end: float | None,
+    species: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    return {
+        "audio_id": recording.source_audio_id,
+        "database_id": recording.id,
+        "source_audio_id": recording.source_audio_id,
+        "filename": recording.filename,
+        "recorded_date": recording.recorded_date,
+        "hour": recording.hour,
+        "minute": recording.minute,
+        "second": recording.second,
+        "duration_seconds": recording.duration_seconds,
+        "sample_rate": recording.sample_rate,
+        "detection_count": detection_count,
+        "max_confidence": max_confidence,
+        "first_detection_start": first_start,
+        "last_detection_end": last_end,
+        "species": species or [],
+        "audio_url": recording_stream_url(recording.source_audio_id),
+    }
+
+
+def recording_species_map(db: Session, recording_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
+    if not recording_ids:
+        return {}
+    rows = db.execute(
+        select(
+            BirdOccurrence.audio_recording_id,
+            Species.id,
+            Species.common_name,
+            Species.scientific_name,
+        )
+        .join(Species, Species.id == BirdOccurrence.species_id)
+        .where(BirdOccurrence.audio_recording_id.in_(recording_ids), public_iucn_clause())
+        .group_by(
+            BirdOccurrence.audio_recording_id,
+            Species.id,
+            Species.common_name,
+            Species.scientific_name,
+        )
+        .order_by(Species.common_name)
+    ).all()
+    by_recording: dict[int, list[dict[str, Any]]] = {}
+    for recording_id, species_id, common_name, scientific_name in rows:
+        by_recording.setdefault(recording_id, []).append(
+            {
+                "id": species_id,
+                "common_name": common_name,
+                "scientific_name": scientific_name,
+            }
+        )
+    return by_recording
+
+
+@router.get("/spots/{spot_id}/recordings")
+def list_spot_recordings(
+    spot_id: int,
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=25, ge=1, le=100),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    if start_date and end_date and start_date > end_date:
+        raise HTTPException(status_code=422, detail="start_date must be on or before end_date")
+    spot = db.get(Spot, spot_id)
+    if spot is None:
+        raise HTTPException(status_code=404, detail="Spot not found")
+
+    conditions = [BirdOccurrence.spot_id == spot_id, public_iucn_clause()]
+    if start_date:
+        conditions.append(AudioRecording.recorded_date >= start_date)
+    if end_date:
+        conditions.append(AudioRecording.recorded_date <= end_date)
+
+    matching_recordings = (
+        select(AudioRecording.id)
+        .join(BirdOccurrence, BirdOccurrence.audio_recording_id == AudioRecording.id)
+        .join(Species, Species.id == BirdOccurrence.species_id)
+        .where(*conditions)
+        .group_by(AudioRecording.id)
+        .subquery()
+    )
+    total = db.scalar(select(func.count()).select_from(matching_recordings)) or 0
+    offset = (page - 1) * limit
+    rows = db.execute(
+        select(
+            AudioRecording,
+            func.count(BirdOccurrence.id).label("detection_count"),
+            func.max(BirdOccurrence.confidence).label("max_confidence"),
+            func.min(BirdOccurrence.start_time_seconds).label("first_start"),
+            func.max(BirdOccurrence.end_time_seconds).label("last_end"),
+        )
+        .join(BirdOccurrence, BirdOccurrence.audio_recording_id == AudioRecording.id)
+        .join(Species, Species.id == BirdOccurrence.species_id)
+        .where(*conditions)
+        .group_by(AudioRecording.id)
+        .order_by(AudioRecording.recorded_date.desc().nullslast(), AudioRecording.filename)
+        .limit(limit)
+        .offset(offset)
+    ).all()
+    species_by_recording = recording_species_map(db, [recording.id for recording, *_ in rows])
+
+    return {
+        "items": [
+            recording_to_dict(
+                recording,
+                count,
+                max_confidence,
+                first_start,
+                last_end,
+                species=species_by_recording.get(recording.id, []),
+            )
+            for recording, count, max_confidence, first_start, last_end in rows
+        ],
+        "page": page,
+        "limit": limit,
+        "total": total,
+        "has_next": offset + len(rows) < total,
+        "has_previous": page > 1,
+    }
+
+
+@router.get("/spots/{spot_id}/species/{species_id}/recordings")
+def list_spot_species_recordings(
+    spot_id: int,
+    species_id: int,
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=25, ge=1, le=100),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    if start_date and end_date and start_date > end_date:
+        raise HTTPException(status_code=422, detail="start_date must be on or before end_date")
+    spot = db.get(Spot, spot_id)
+    species = db.get(Species, species_id)
+    if spot is None:
+        raise HTTPException(status_code=404, detail="Spot not found")
+    if species is None or not is_public_species(species):
+        raise HTTPException(status_code=404, detail="Species not found")
+
+    conditions = [
+        BirdOccurrence.spot_id == spot_id,
+        BirdOccurrence.species_id == species_id,
+    ]
+    if start_date:
+        conditions.append(AudioRecording.recorded_date >= start_date)
+    if end_date:
+        conditions.append(AudioRecording.recorded_date <= end_date)
+
+    matching_recordings = (
+        select(AudioRecording.id)
+        .join(BirdOccurrence, BirdOccurrence.audio_recording_id == AudioRecording.id)
+        .where(*conditions)
+        .group_by(AudioRecording.id)
+        .subquery()
+    )
+    total = db.scalar(select(func.count()).select_from(matching_recordings)) or 0
+    offset = (page - 1) * limit
+    rows = db.execute(
+        select(
+            AudioRecording,
+            func.count(BirdOccurrence.id).label("detection_count"),
+            func.max(BirdOccurrence.confidence).label("max_confidence"),
+            func.min(BirdOccurrence.start_time_seconds).label("first_start"),
+            func.max(BirdOccurrence.end_time_seconds).label("last_end"),
+        )
+        .join(BirdOccurrence, BirdOccurrence.audio_recording_id == AudioRecording.id)
+        .where(*conditions)
+        .group_by(AudioRecording.id)
+        .order_by(AudioRecording.recorded_date.desc().nullslast(), AudioRecording.filename)
+        .limit(limit)
+        .offset(offset)
+    ).all()
+
+    return {
+        "items": [
+            recording_to_dict(recording, count, max_confidence, first_start, last_end)
+            for recording, count, max_confidence, first_start, last_end in rows
+        ],
+        "page": page,
+        "limit": limit,
+        "total": total,
+        "has_next": offset + len(rows) < total,
+        "has_previous": page > 1,
+    }
+
+
+def _recording_file_path(recording: AudioRecording, settings: Settings) -> Path:
+    if settings.data_dir is None:
+        raise HTTPException(status_code=500, detail="DATA_DIR is not configured.")
+
+    data_dir = settings.data_dir.resolve()
+    candidates = [
+        data_dir / recording.relative_path,
+        data_dir / "projects" / recording.source_project_id / recording.source_spot_id / "audio" / recording.filename,
+    ]
+    project_root = data_dir / "projects" / recording.source_project_id
+    if project_root.is_dir():
+        for child in project_root.iterdir():
+            candidate = child / "audio" / recording.filename
+            if child.is_dir() and normalise_spot(child.name) == recording.source_spot_id:
+                candidates.append(candidate)
+
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if not resolved.is_relative_to(data_dir):
+            continue
+        if resolved.is_file():
+            return resolved
+    raise HTTPException(status_code=404, detail="Audio file not found")
+
+
+@router.get("/recordings/{audio_id}/stream")
+def stream_recording(
+    audio_id: str,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> FileResponse:
+    recording = db.scalar(select(AudioRecording).where(AudioRecording.source_audio_id == audio_id))
+    if recording is None:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    public_occurrence_count = db.scalar(
+        select(func.count())
+        .select_from(BirdOccurrence)
+        .join(Species, Species.id == BirdOccurrence.species_id)
+        .where(BirdOccurrence.audio_recording_id == recording.id, public_iucn_clause())
+    ) or 0
+    if public_occurrence_count == 0:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    path = _recording_file_path(recording, settings)
+    media_type = mimetypes.guess_type(recording.filename)[0] or "application/octet-stream"
+    return FileResponse(path, media_type=media_type, filename=recording.filename)
 
 
 @router.get("/spots/{spot_id}/summary")

@@ -76,6 +76,7 @@ def index_project(
         jobs = source.list_jobs(data_dir, project)
         verdicts, pooled = source.read_migratory(data_dir, project)
         indices = source.read_acoustic_indices(data_dir, project)
+        iucn_cache = source.read_species_iucn_cache(data_dir, project)
     except source.SourceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -85,12 +86,17 @@ def index_project(
             detail="Project has no detections in dataset/aggregate.csv; nothing can be published.",
         )
 
-    computed = rollups.build(detections, audio_counts=audio_counts)
+    computed = rollups.build(
+        detections, audio_counts=audio_counts, iucn_cache=iucn_cache
+    )
     report = write(
         db,
         project,
         computed,
         coords,
+        detections=detections,
+        iucn_cache=iucn_cache,
+        data_dir=data_dir,
         jobs=jobs,
         verdicts=verdicts,
         indices=indices,

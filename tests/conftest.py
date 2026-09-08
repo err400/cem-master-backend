@@ -66,7 +66,7 @@ else:
 
     from app.database import Base, engine
     from app.main import app
-    import app.models  # noqa: F401  (registers the tables on Base.metadata)
+    import app.models as _models  # noqa: F401  (registers the tables on Base.metadata)
 
     @pytest.fixture()
     def client() -> Generator[TestClient, None, None]:

@@ -24,6 +24,8 @@ from app.indexer import rollups, source
 from app.indexer.writer import write
 from app.models import (
     AnalysisJob,
+    AudioRecording,
+    BirdOccurrence,
     Species,
     Spot,
     SpotSource,
@@ -63,11 +65,15 @@ def _index(data_dir: Path, project: str = PROJECT, filebrowser_url: str = FILEBR
         jobs = source.list_jobs(data_dir, project)
         verdicts, pooled = source.read_migratory(data_dir, project)
         indices = source.read_acoustic_indices(data_dir, project)
+        iucn_cache = source.read_species_iucn_cache(data_dir, project)
         report = write(
             db,
             project,
-            rollups.build(df, audio_counts=audio),
+            rollups.build(df, audio_counts=audio, iucn_cache=iucn_cache),
             coords,
+            detections=df,
+            iucn_cache=iucn_cache,
+            data_dir=data_dir,
             jobs=jobs,
             verdicts=verdicts,
             indices=indices,
@@ -100,6 +106,21 @@ def _snapshot() -> dict:
                 (d.spot_id, d.species_id, d.observation_date.isoformat(), d.detection_count)
                 for d in db.scalars(select(SpotSpeciesDaily)).all()
             ),
+            "recordings": sorted(
+                (
+                    r.source_audio_id,
+                    r.spot_id,
+                    r.source_project_id,
+                    r.source_spot_id,
+                    r.filename,
+                    r.recorded_date.isoformat(),
+                )
+                for r in db.scalars(select(AudioRecording)).all()
+            ),
+            "occurrences": sorted(
+                (o.audio_recording_id, o.spot_id, o.species_id, o.confidence)
+                for o in db.scalars(select(BirdOccurrence)).all()
+            ),
         }
 
 
@@ -119,6 +140,8 @@ def test_first_pass_writes_expected_rows(clean_db, data_dir: Path) -> None:
         assert db.scalar(select(func.count()).select_from(Spot)) == 2
         assert db.scalar(select(func.count()).select_from(Species)) == 3
         assert db.scalar(select(func.count()).select_from(SpotSource)) == 2
+        assert db.scalar(select(func.count()).select_from(AudioRecording)) == 7
+        assert db.scalar(select(func.count()).select_from(BirdOccurrence)) == 24
 
         site_a = db.scalar(select(Spot).where(Spot.source_spot_id == "site_a"))
         # Coordinates came from geo.json, where the spot is spelled SITE_A.
@@ -127,6 +150,29 @@ def test_first_pass_writes_expected_rows(clean_db, data_dir: Path) -> None:
         summary = db.get(SpotSummary, site_a.id)
         assert (summary.species_richness, summary.total_detections) == (2, 13)
         assert (summary.active_days, summary.recording_count) == (2, 4)
+
+
+def test_species_recordings_api_returns_only_matching_audio(clean_db, data_dir: Path, client) -> None:
+    _index(data_dir)
+    with SessionLocal() as db:
+        peafowl = db.scalar(select(Species).where(Species.common_name == "Indian Peafowl"))
+        site_a = db.scalar(select(Spot).where(Spot.source_spot_id == "site_a"))
+
+    response = client.get(f"/api/v1/spots/{site_a.id}/species/{peafowl.id}/recordings?limit=2")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 3
+    assert payload["limit"] == 2
+    assert payload["has_next"] is True
+    assert len(payload["items"]) == 2
+    assert all(item["audio_url"].startswith("/api/v1/recordings/") for item in payload["items"])
+    assert all(item["audio_id"].startswith("aud_") for item in payload["items"])
+    assert all(item["audio_id"] in item["audio_url"] for item in payload["items"])
+    assert {item["filename"] for item in payload["items"]} <= {
+        "SPOTA_20260410_060000.wav",
+        "SPOTA_20260410_170000.wav",
+        "SPOTA_20260411_060000.wav",
+    }
 
 
 def test_hourly_counts_survive_the_round_trip(clean_db, data_dir: Path) -> None:
