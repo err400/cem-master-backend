@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.database import get_db
+from app.indexer.rollups import SENSITIVE_IUCN_CATEGORIES
 from app.models import Species, Spot, SpotSource, SpotSpeciesDaily, SpotSpeciesSummary
 from app.schemas import SpotCreate, SpotRead
 
@@ -42,6 +43,13 @@ def spot_to_feature(spot: Spot) -> dict[str, Any]:
     }
 
 
+def public_iucn_clause():
+    return (
+        Species.iucn_category.is_not(None),
+        func.upper(func.trim(Species.iucn_category)).not_in(SENSITIVE_IUCN_CATEGORIES),
+    )
+
+
 @router.get("")
 def list_spots(
     species_id: int | None = Query(default=None, ge=1),
@@ -58,7 +66,10 @@ def list_spots(
     migration_class = migration_class.strip() if migration_class else None
     stmt = select(Spot).order_by(Spot.id)
     if species_id is not None:
-        if db.get(Species, species_id) is None:
+        species = db.get(Species, species_id)
+        if species is None:
+            raise HTTPException(status_code=404, detail="Species not found")
+        if not species.iucn_category or species.iucn_category.strip().upper() in SENSITIVE_IUCN_CATEGORIES:
             raise HTTPException(status_code=404, detail="Species not found")
         summary_filter = select(SpotSpeciesSummary.spot_id).where(
             SpotSpeciesSummary.species_id == species_id
@@ -93,7 +104,10 @@ def list_spots(
             select(func.count()).select_from(SpotSource).where(SpotSource.spot_id == spot.id)
         ) or 1
         feature["properties"]["species_count"] = db.scalar(
-            select(func.count()).select_from(SpotSpeciesSummary).where(SpotSpeciesSummary.spot_id == spot.id)
+            select(func.count())
+            .select_from(SpotSpeciesSummary)
+            .join(Species, Species.id == SpotSpeciesSummary.species_id)
+            .where(SpotSpeciesSummary.spot_id == spot.id, *public_iucn_clause())
         ) or 0
 
         if species_id is not None:

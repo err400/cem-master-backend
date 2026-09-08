@@ -22,6 +22,17 @@ from app.models import (
 router = APIRouter(prefix="/api/v1", tags=["dashboard"])
 
 
+def public_iucn_clause():
+    return and_(
+        Species.iucn_category.is_not(None),
+        func.upper(func.trim(Species.iucn_category)).not_in(SENSITIVE_IUCN_CATEGORIES),
+    )
+
+
+def is_public_species(species: Species) -> bool:
+    return bool(species.iucn_category) and species.iucn_category.strip().upper() not in SENSITIVE_IUCN_CATEGORIES
+
+
 def species_to_dict(species: Species) -> dict[str, Any]:
     metrics = dict(species.network_metrics or {})
     if species.migration_class:
@@ -57,12 +68,7 @@ def list_species(
     stmt = select(Species).where(Species.id.in_(active_species_ids))
 
     # Exclude sensitive/endangered/unknown categories (Fail Closed)
-    stmt = stmt.where(
-        and_(
-            Species.iucn_category.is_not(None),
-            func.upper(func.trim(Species.iucn_category)).not_in(SENSITIVE_IUCN_CATEGORIES),
-        )
-    )
+    stmt = stmt.where(public_iucn_clause())
 
     if search and search.strip():
         pattern = f"%{search.strip()}%"
@@ -85,7 +91,7 @@ def get_species(species_id: int, db: Session = Depends(get_db)) -> dict[str, Any
     species = db.get(Species, species_id)
     if species is None:
         raise HTTPException(status_code=404, detail="Species not found")
-    if not species.iucn_category or species.iucn_category.strip().upper() in SENSITIVE_IUCN_CATEGORIES:
+    if not is_public_species(species):
         raise HTTPException(status_code=404, detail="Species not found")
     result = species_to_dict(species)
     result["spot_count"] = db.scalar(
@@ -109,7 +115,7 @@ def get_spot_summary(spot_id: int, db: Session = Depends(get_db)) -> dict[str, A
     inventory_rows = db.execute(
         select(SpotSpeciesSummary, Species)
         .join(Species, Species.id == SpotSpeciesSummary.species_id)
-        .where(SpotSpeciesSummary.spot_id == spot_id)
+        .where(SpotSpeciesSummary.spot_id == spot_id, public_iucn_clause())
         .order_by(SpotSpeciesSummary.detection_count.desc())
     ).all()
     job_count = db.scalar(
@@ -198,6 +204,8 @@ def get_spot_species_summary(
     if spot is None:
         raise HTTPException(status_code=404, detail="Spot not found")
     if species is None:
+        raise HTTPException(status_code=404, detail="Species not found")
+    if not is_public_species(species):
         raise HTTPException(status_code=404, detail="Species not found")
 
     item = db.scalar(
@@ -325,12 +333,12 @@ def get_spot_environment(
 
 @router.get("/rankings/threatened-spots")
 def threatened_spot_rankings(db: Session = Depends(get_db)) -> dict[str, Any]:
-    threatened_categories = ("VU", "EN", "CR", "Vulnerable", "Endangered", "Critically Endangered")
+    threatened_categories = ("VU", "VULNERABLE")
     rows = db.execute(
         select(Spot, func.count(SpotSpeciesSummary.id).label("threatened_species_richness"))
         .join(SpotSpeciesSummary, SpotSpeciesSummary.spot_id == Spot.id)
         .join(Species, Species.id == SpotSpeciesSummary.species_id)
-        .where(Species.iucn_category.in_(threatened_categories))
+        .where(func.upper(func.trim(Species.iucn_category)).in_(threatened_categories))
         .group_by(Spot.id)
         .order_by(func.count(SpotSpeciesSummary.id).desc(), Spot.name)
     ).all()

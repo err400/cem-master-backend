@@ -118,10 +118,19 @@ def prepare(df: pd.DataFrame, iucn_cache: dict[str, str] | None = None) -> pd.Da
 
     # 1. Resolve IUCN category from cache if column is absent or contains missing values
     if iucn_cache:
+        normalized_cache = {
+            str(key).strip().lower(): str(value).strip().upper()
+            for key, value in iucn_cache.items()
+            if key and value
+        }
+        cache_lookup = out["scientific_name"].astype(str).str.strip().str.lower().map(normalized_cache)
         if "iucn_category" not in out.columns:
-            out["iucn_category"] = out["scientific_name"].map(iucn_cache)
+            out["iucn_category"] = cache_lookup
         else:
-            out["iucn_category"] = out["iucn_category"].fillna(out["scientific_name"].map(iucn_cache))
+            missing_category = out["iucn_category"].isna() | (
+                out["iucn_category"].astype(str).str.strip() == ""
+            )
+            out.loc[missing_category, "iucn_category"] = cache_lookup[missing_category]
 
     # 2. Filter out Endangered / Extinct / Unknown species before any grouping/rollups (Fail Closed)
     if "iucn_category" in out.columns:
