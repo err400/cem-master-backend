@@ -31,7 +31,7 @@ from pathlib import Path
 import wave
 
 import pandas as pd
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -73,6 +73,7 @@ class IndexReport:
     migration_classes_set: int = 0
     spots_with_indices: int = 0
     spot_aliases_added: int = 0
+    snippets_indexed: int = 0
     spots_without_coordinates: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -93,6 +94,7 @@ class IndexReport:
             f"{self.jobs_deleted} stale removed",
             f"  migration class  {self.migration_classes_set} set",
             f"  acoustic indices {self.spots_with_indices} spot(s)",
+            f"  audio snippets   {self.snippets_indexed} indexed",
         ]
         if self.spots_without_coordinates:
             lines.append(
@@ -758,6 +760,88 @@ def _write_jobs(
         report.jobs_deleted += db.execute(stale).rowcount or 0
 
 
+def _write_snippets(
+    db: Session,
+    project: str,
+    snippets: dict[str, dict] | None,
+    spots_by_key: dict[str, Spot],
+    species_by_name: dict[str, Species],
+    report: IndexReport,
+) -> None:
+    # Index 9-second audio snippets for spot-level species and global showcase.
+
+    # 1. Annotates SpotSpeciesSummary with snippet_rel_path, confidence, windows, and streaming URL.
+    # 2. Updates global Species registry if this project's snippet has higher confidence than previous best.
+    
+    if not snippets:
+        return
+
+    species_by_common = {
+        s.common_name.strip().lower(): s
+        for s in species_by_name.values()
+        if s.common_name
+    }
+
+    for key, sp_meta in snippets.items():
+        if not isinstance(sp_meta, dict):
+            continue
+        common_name = str(sp_meta.get("common_name", "")).strip()
+        scientific_name = str(sp_meta.get("scientific_name", "")).strip()
+        spot_name = normalise_spot(sp_meta.get("spot", ""))
+        max_conf = float(sp_meta.get("max_confidence", 0.0) or 0.0)
+        snippet_rel_path = str(sp_meta.get("snippet_rel_path", "")).strip()
+        detection_window = sp_meta.get("detection_window")
+        snippet_window = sp_meta.get("snippet_window")
+
+        if not snippet_rel_path:
+            continue
+
+        filename = Path(snippet_rel_path).name
+        snippet_url = f"/api/v1/projects/{project}/snippets/{filename}"
+
+        species = species_by_name.get(scientific_name)
+        if species is None and common_name:
+            species = species_by_common.get(common_name.lower())
+        if species is None:
+            if scientific_name:
+                species = db.scalar(select(Species).where(Species.scientific_name == scientific_name))
+            if species is None and common_name:
+                species = db.scalar(
+                    select(Species).where(func.lower(Species.common_name) == common_name.lower())
+                )
+
+        if species is None:
+            continue
+
+        # 1. Update spot-level species record
+        spot = spots_by_key.get(spot_name)
+        if spot is not None:
+            row = db.scalar(
+                select(SpotSpeciesSummary).where(
+                    SpotSpeciesSummary.spot_id == spot.id,
+                    SpotSpeciesSummary.species_id == species.id,
+                )
+            )
+            if row is not None:
+                row.snippet_rel_path = snippet_rel_path
+                row.snippet_url = snippet_url
+                row.snippet_confidence = max_conf
+                row.snippet_detection_window = detection_window
+                row.snippet_window = snippet_window
+                report.snippets_indexed += 1
+
+        # 2. Update Global "Best-of-All-Time" Species Registry
+        if species.best_snippet_confidence is None or max_conf > float(
+            species.best_snippet_confidence or 0.0
+        ):
+            species.best_snippet_confidence = max_conf
+            species.best_snippet_path = f"projects/{project}/{snippet_rel_path}"
+            species.best_snippet_url = snippet_url
+            species.best_snippet_spot_name = spot.name if spot else str(sp_meta.get("spot", ""))
+            species.best_snippet_project_id = project
+            species.best_snippet_window = snippet_window
+
+
 def write(
     db: Session,
     project: str,
@@ -769,6 +853,7 @@ def write(
     jobs: list[JobRef] | None = None,
     verdicts: dict[tuple[str, str], dict] | None = None,
     indices: dict[str, dict] | None = None,
+    snippets: dict[str, dict] | None = None,
     pooled_verdicts: bool = False,
     filebrowser_url: str = "",
 ) -> IndexReport:
@@ -803,6 +888,7 @@ def write(
     jobs = jobs or []
     verdicts = verdicts or {}
     indices = indices or {}
+    snippets = snippets or {}
 
     if verdicts and pooled_verdicts:
         report.warnings.append(
@@ -825,6 +911,8 @@ def write(
         # After the species rows exist, so there is something to annotate.
         _write_migration_class(db, spot, rollup, species_by_name, verdicts, report)
         _write_indices(db, spot, rollup, indices, report)
+
+    _write_snippets(db, project, snippets, spots_by_key, species_by_name, report)
 
     _write_recordings(
         db,

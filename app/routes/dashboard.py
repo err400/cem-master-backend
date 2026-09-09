@@ -64,6 +64,13 @@ def species_to_dict(species: Species) -> dict[str, Any]:
         "seasonality": species.seasonality,
         "taxonomy": species.taxonomy or {},
         "network_metrics": metrics,
+        "snippet": {
+            "url": species.best_snippet_url,
+            "confidence": species.best_snippet_confidence,
+            "spot_name": species.best_snippet_spot_name,
+            "project_id": species.best_snippet_project_id,
+            "window": species.best_snippet_window,
+        } if species.best_snippet_url else None,
     }
 
 
@@ -430,6 +437,12 @@ def get_spot_summary(spot_id: int, db: Session = Depends(get_db)) -> dict[str, A
                 "last_occurrence": item.last_detection_date,
                 "monthly_counts": item.monthly_counts or [],
                 "hourly_counts": item.hourly_counts or [],
+                "snippet": {
+                    "url": item.snippet_url,
+                    "confidence": item.snippet_confidence,
+                    "detection_window": item.snippet_detection_window,
+                    "window": item.snippet_window,
+                } if item.snippet_url else None,
             }
             for item, species in inventory_rows
         ],
@@ -531,6 +544,12 @@ def get_spot_species_summary(
             "monthly_counts": item.monthly_counts or [],
             "analysis_metrics": item.analysis_metrics or {},
             "analysis_assets": item.analysis_assets or [],
+            "snippet": {
+                "url": item.snippet_url,
+                "confidence": item.snippet_confidence,
+                "detection_window": item.snippet_detection_window,
+                "window": item.snippet_window,
+            } if item.snippet_url else None,
         },
         "jobs": [
             {
@@ -608,3 +627,30 @@ def threatened_spot_rankings(db: Session = Depends(get_db)) -> dict[str, Any]:
             for rank, (spot, richness) in enumerate(rows, start=1)
         ]
     }
+
+
+@router.get("/projects/{project_name}/snippets/{filename}")
+def stream_snippet(
+    project_name: str,
+    filename: str,
+    settings: Settings = Depends(get_settings),
+) -> FileResponse:
+    if settings.data_dir is None:
+        raise HTTPException(status_code=500, detail="DATA_DIR is not configured.")
+
+    clean_project = Path(project_name).name
+    clean_filename = Path(filename).name
+
+    data_dir = settings.data_dir.resolve()
+    target_file = (data_dir / "projects" / clean_project / "snippets" / clean_filename).resolve()
+
+    if not target_file.is_relative_to(data_dir) or not target_file.is_file():
+        raise HTTPException(status_code=404, detail="Audio snippet not found")
+
+    return FileResponse(
+        target_file,
+        media_type="audio/wav",
+        filename=clean_filename,
+        headers={"Accept-Ranges": "bytes"},
+    )
+

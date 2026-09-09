@@ -390,6 +390,23 @@ def read_species_iucn_cache(data_dir: Path, project: str) -> dict[str, str]:
         return {}
 
 
+def read_species_snippets(data_dir: Path, project: str) -> dict[str, dict]:
+    """Read project-level 9s species snippets metadata from snippets/species_snippets.json.
+
+    Returns an empty dict if the file is absent or malformed.
+    """
+    snippets_path = project_root(data_dir, project) / "snippets" / "species_snippets.json"
+    if not snippets_path.is_file():
+        return {}
+    try:
+        data = json.loads(snippets_path.read_text())
+        if isinstance(data, dict):
+            return data.get("species") or {}
+        return {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
 _RESERVED_DIRS = {"dataset", ".git", "__pycache__"}
 
 

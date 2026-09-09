@@ -4,7 +4,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.database import get_db
 from app.routes import dashboard, indexer, spots
 
@@ -34,6 +34,16 @@ def health(db: Session = Depends(get_db)) -> dict[str, str]:
     return {"status": "ok", "database": "postgresql"}
 
 
+@app.get("/api/projects/{project_name}/snippets/{filename}")
+def stream_snippet_alias(
+    project_name: str,
+    filename: str,
+    settings: Settings = Depends(get_settings),
+):
+    return dashboard.stream_snippet(project_name, filename, settings)
+
+
 app.include_router(spots.router)
 app.include_router(dashboard.router)
 app.include_router(indexer.router)
+

@@ -94,6 +94,7 @@ def _index_project(
         verdicts, pooled = source.read_migratory(data_dir, project)
         indices = source.read_acoustic_indices(data_dir, project)
         iucn_cache = source.read_species_iucn_cache(data_dir, project)
+        snippets = source.read_species_snippets(data_dir, project)
     except source.SourceError as exc:
         print(f"project {project}: SKIPPED -- {exc}", file=sys.stderr)
         return False
@@ -116,6 +117,7 @@ def _index_project(
         jobs=jobs,
         verdicts=verdicts,
         indices=indices,
+        snippets=snippets,
         pooled_verdicts=pooled,
         filebrowser_url=filebrowser_url,
     )

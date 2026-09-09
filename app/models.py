@@ -70,6 +70,12 @@ class Species(Base):
     seasonality: Mapped[str | None] = mapped_column(String(160), nullable=True)
     taxonomy: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     network_metrics: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    best_snippet_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    best_snippet_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    best_snippet_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    best_snippet_spot_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    best_snippet_project_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    best_snippet_window: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
     )
@@ -118,6 +124,11 @@ class SpotSpeciesSummary(Base):
     monthly_counts: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     analysis_metrics: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     analysis_assets: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    snippet_rel_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    snippet_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    snippet_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    snippet_detection_window: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    snippet_window: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
     )
