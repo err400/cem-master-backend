@@ -364,6 +364,41 @@ def stream_recording(
     return FileResponse(path, media_type=media_type, filename=recording.filename)
 
 
+def _spot_jobs(db: Session, spot_id: int) -> list[dict[str, Any]]:
+    """Analysis runs that produced this spot's data.
+
+    Jobs belong to the spot, not to any one bird: the indexer writes
+    species_id=None for every run (see writer.py, "runs are not
+    species-specific"). They used to be returned from the spot+species
+    endpoint, where the species filter was inert and the table silently
+    listed every run at the spot -- including acoustic-indices runs that
+    have nothing to do with the selected bird. Provenance lives on the
+    spot panel now.
+
+    input_url is deliberately absent. The compute app shares results only,
+    never inputs; a link to a job's input folder would expose the raw audio,
+    including recordings whose only detections are withheld species.
+    """
+    jobs = db.scalars(
+        select(AnalysisJob)
+        .where(AnalysisJob.spot_id == spot_id)
+        .order_by(AnalysisJob.started_at.desc(), AnalysisJob.job_id)
+    ).all()
+    return [
+        {
+            "job_id": job.job_id,
+            "analysis_type": job.analysis_type,
+            "status": job.status,
+            "input_file": (job.job_metadata or {}).get("input_file"),
+            "output_file": (job.job_metadata or {}).get("output_file"),
+            "output_url": job.output_url,
+            "started_at": job.started_at,
+            "completed_at": job.completed_at,
+        }
+        for job in jobs
+    ]
+
+
 @router.get("/spots/{spot_id}/summary")
 def get_spot_summary(spot_id: int, db: Session = Depends(get_db)) -> dict[str, Any]:
     spot = db.get(Spot, spot_id)
@@ -454,6 +489,7 @@ def get_spot_summary(spot_id: int, db: Session = Depends(get_db)) -> dict[str, A
             }
             for source in sources
         ],
+        "jobs": _spot_jobs(db, spot_id),
     }
 
 
@@ -512,13 +548,9 @@ def get_spot_species_summary(
             for row in daily_rows
         ]
 
-    jobs = db.scalars(
-        select(AnalysisJob).where(
-            AnalysisJob.spot_id == spot_id,
-            or_(AnalysisJob.species_id == species_id, AnalysisJob.species_id.is_(None)),
-        ).order_by(AnalysisJob.started_at.desc(), AnalysisJob.job_id)
-    ).all()
-
+    # No "jobs" key here on purpose. Analysis runs are spot-level provenance,
+    # not species facts -- see _spot_jobs(). They are served from
+    # GET /spots/{spot_id}/summary instead.
     return {
         "spot": {
             "id": spot.id,
@@ -551,20 +583,6 @@ def get_spot_species_summary(
                 "window": item.snippet_window,
             } if item.snippet_url else None,
         },
-        "jobs": [
-            {
-                "job_id": job.job_id,
-                "analysis_type": job.analysis_type,
-                "status": job.status,
-                "input_file": (job.job_metadata or {}).get("input_file"),
-                "input_url": job.input_url,
-                "output_file": (job.job_metadata or {}).get("output_file"),
-                "output_url": job.output_url,
-                "started_at": job.started_at,
-                "completed_at": job.completed_at,
-            }
-            for job in jobs
-        ],
     }
 
 
