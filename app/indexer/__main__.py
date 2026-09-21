@@ -25,6 +25,7 @@ from pathlib import Path
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
+from app.debug import debug
 
 from . import rollups
 from . import source
@@ -86,6 +87,7 @@ def _index_project(
     filebrowser_url: str = "",
 ) -> bool:
     """Index one project inside its own transaction. Returns True on success."""
+    debug("index.start", project=project, dry_run=dry_run)
     try:
         detections = source.read_aggregate(data_dir, project)
         coords = source.read_geo(data_dir, project)
@@ -95,7 +97,9 @@ def _index_project(
         indices = source.read_acoustic_indices(data_dir, project)
         iucn_cache = source.read_species_iucn_cache(data_dir, project)
         snippets = source.read_species_snippets(data_dir, project)
+        debug("index.inputs", project=project, detections=len(detections), jobs=len(jobs), snippets=len(snippets))
     except source.SourceError as exc:
+        debug("index.skipped", project=project, error=type(exc).__name__)
         print(f"project {project}: SKIPPED -- {exc}", file=sys.stderr)
         return False
 
@@ -130,6 +134,7 @@ def _index_project(
         db.commit()
         print(report.summary())
 
+    debug("index.finish", project=project, dry_run=dry_run, snippets=report.snippets_indexed)
     return True
 
 

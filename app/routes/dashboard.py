@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.database import get_db
+from app.debug import debug
 from app.indexer.source import normalise_spot
 from app.indexer.rollups import SENSITIVE_IUCN_CATEGORIES
 from app.models import (
@@ -45,6 +46,7 @@ def recording_stream_url(audio_id: str) -> str:
 
 
 def species_to_dict(species: Species) -> dict[str, Any]:
+    debug("species.serialize", species_id=species.id, has_snippet=bool(species.best_snippet_url))
     metrics = dict(species.network_metrics or {})
     if species.migration_class:
         metrics.setdefault("migration", species.migration_class)
@@ -663,12 +665,13 @@ def stream_snippet(
     target_file = (data_dir / "projects" / clean_project / "snippets" / clean_filename).resolve()
 
     if not target_file.is_relative_to(data_dir) or not target_file.is_file():
+        debug("snippet.stream_missing", project=clean_project, filename=clean_filename)
         raise HTTPException(status_code=404, detail="Audio snippet not found")
 
+    debug("snippet.stream", project=clean_project, filename=clean_filename, bytes=target_file.stat().st_size)
     return FileResponse(
         target_file,
         media_type="audio/wav",
         filename=clean_filename,
         headers={"Accept-Ranges": "bytes"},
     )
-

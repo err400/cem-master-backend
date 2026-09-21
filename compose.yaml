@@ -6,6 +6,7 @@ services:
     ports:
       - "${BACKEND_PORT:-8001}:8001"
     environment:
+      DEBUG: ${DEBUG:-false}
       DATABASE_URL: "${DATABASE_URL:?Set DATABASE_URL to the cem-database PostgreSQL URL}"
       CORS_ORIGINS: "${BACKEND_CORS_ORIGINS:-http://localhost:8000,http://127.0.0.1:8000}"
       CEM_MASTER_API_KEY: "${BACKEND_API_KEY:-}"
@@ -33,6 +34,7 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
+      DEBUG: ${DEBUG:-false}
       DATABASE_URL: "${DATABASE_URL:?Set DATABASE_URL to the cem-database PostgreSQL URL}"
       DATA_DIR: /data
       INDEXER_POLL_SECONDS: ${INDEXER_POLL_SECONDS:-30}
@@ -62,6 +64,8 @@ services:
   # real constraint and it is why the README says to clone the two repos next to
   # each other. Override with MASTER_FRONTEND_CONTEXT if your layout differs.
   frontend:
+    environment:
+      DEBUG: ${DEBUG:-false}
     build:
       context: ${MASTER_FRONTEND_CONTEXT:-../cem-master-frontend}
       dockerfile: Dockerfile

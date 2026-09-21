@@ -6,12 +6,16 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.database import get_db
+from app.debug import DEBUG, DebugRequests, debug
 from app.routes import dashboard, indexer, spots
 
 settings = get_settings()
 
 
 app = FastAPI(title=settings.app_name)
+if DEBUG:
+    app.add_middleware(DebugRequests)
+debug("startup", data_dir=settings.data_dir)
 
 app.add_middleware(
     CORSMiddleware,
@@ -46,4 +50,3 @@ def stream_snippet_alias(
 app.include_router(spots.router)
 app.include_router(dashboard.router)
 app.include_router(indexer.router)
-
