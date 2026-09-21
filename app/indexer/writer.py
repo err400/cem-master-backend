@@ -33,6 +33,7 @@ import wave
 import pandas as pd
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
+from app.debug import debug
 
 from app.models import (
     AnalysisJob,
@@ -774,6 +775,7 @@ def _write_snippets(
     # 2. Updates global Species registry if this project's snippet has higher confidence than previous best.
     
     if not snippets:
+        debug("snippets.index_skipped", project=project, reason="no_metadata")
         return
 
     species_by_common = {
@@ -784,6 +786,7 @@ def _write_snippets(
 
     for key, sp_meta in snippets.items():
         if not isinstance(sp_meta, dict):
+            debug("snippet.index_skipped", project=project, key=key, reason="invalid_metadata")
             continue
         common_name = str(sp_meta.get("common_name", "")).strip()
         scientific_name = str(sp_meta.get("scientific_name", "")).strip()
@@ -794,6 +797,7 @@ def _write_snippets(
         snippet_window = sp_meta.get("snippet_window")
 
         if not snippet_rel_path:
+            debug("snippet.index_skipped", project=project, key=key, reason="missing_path")
             continue
 
         filename = Path(snippet_rel_path).name
@@ -829,6 +833,8 @@ def _write_snippets(
                 row.snippet_detection_window = detection_window
                 row.snippet_window = snippet_window
                 report.snippets_indexed += 1
+                debug("snippet.indexed", project=project, species_id=species.id, spot_id=spot.id,
+                      confidence=max_conf, url=snippet_url)
 
         # 2. Update Global "Best-of-All-Time" Species Registry
         if species.best_snippet_confidence is None or max_conf > float(
@@ -840,6 +846,7 @@ def _write_snippets(
             species.best_snippet_spot_name = spot.name if spot else str(sp_meta.get("spot", ""))
             species.best_snippet_project_id = project
             species.best_snippet_window = snippet_window
+            debug("snippet.global_best", project=project, species_id=species.id, confidence=max_conf)
 
 
 def write(

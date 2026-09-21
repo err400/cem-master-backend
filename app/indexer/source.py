@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
+from app.debug import debug
 
 # Columns the indexer relies on. birdnet_predictions.py writes these plus
 # scientific_name/common_name/confidence from BirdNET itself.
@@ -397,13 +398,19 @@ def read_species_snippets(data_dir: Path, project: str) -> dict[str, dict]:
     """
     snippets_path = project_root(data_dir, project) / "snippets" / "species_snippets.json"
     if not snippets_path.is_file():
+        debug("snippets.missing_index", project=project, reason="Compute has not generated clips")
         return {}
     try:
         data = json.loads(snippets_path.read_text())
         if isinstance(data, dict):
-            return data.get("species") or {}
+            species = data.get("species") or {}
+            if isinstance(species, dict):
+                debug("snippets.loaded", project=project, count=len(species))
+                return species
+        debug("snippets.invalid_index", project=project, reason="expected_species_object")
         return {}
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError) as exc:
+        debug("snippets.invalid_index", project=project, error=type(exc).__name__)
         return {}
 
 

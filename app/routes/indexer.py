@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.database import get_db
+from app.debug import debug
 from app.indexer import rollups, source
 from app.indexer.writer import prune_project, write
 
@@ -77,6 +78,8 @@ def index_project(
         verdicts, pooled = source.read_migratory(data_dir, project)
         indices = source.read_acoustic_indices(data_dir, project)
         iucn_cache = source.read_species_iucn_cache(data_dir, project)
+        snippets = source.read_species_snippets(data_dir, project)
+        debug("index.inputs", project=project, detections=len(detections), jobs=len(jobs), snippets=len(snippets))
     except source.SourceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -100,6 +103,7 @@ def index_project(
         jobs=jobs,
         verdicts=verdicts,
         indices=indices,
+        snippets=snippets,
         pooled_verdicts=pooled,
     )
 
@@ -108,6 +112,7 @@ def index_project(
     else:
         db.commit()
 
+    debug("index.finish", project=project, dry_run=dry_run, snippets=report.snippets_indexed)
     return {
         "status": "dry_run" if dry_run else "indexed",
         "project": project,
