@@ -25,7 +25,7 @@ from pathlib import Path
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
-from app.debug import debug
+from app.debug import debug, error, info
 
 from . import rollups
 from . import source
@@ -134,7 +134,7 @@ def _index_project(
         db.commit()
         print(report.summary())
 
-    debug("index.finish", project=project, dry_run=dry_run, snippets=report.snippets_indexed)
+    info("index.finish", project=project, dry_run=dry_run, snippets=report.snippets_indexed, spots=len(computed))
     return True
 
 
@@ -242,6 +242,7 @@ def _run_once(args: argparse.Namespace, data_dir: Path, url: str) -> int:
                 except Exception as exc:  # noqa: BLE001 - report and continue
                     db.rollback()
                     failures += 1
+                    error("index.failed", project=project, error=str(exc))
                     print(f"project {project}: FAILED -- {exc}", file=sys.stderr)
     finally:
         engine.dispose()
@@ -263,6 +264,7 @@ def main(argv: list[str] | None = None) -> int:
         return _run_once(args, data_dir, url)
 
     interval = max(1.0, args.interval_seconds)
+    info("indexer.watching", data_dir=str(data_dir), interval_seconds=interval)
     print(f"watching {data_dir} every {interval:g}s", flush=True)
     while True:
         started = time.time()

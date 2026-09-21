@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.database import get_db
-from app.debug import DEBUG, DebugRequests, debug
+from app.debug import DEBUG, DebugRequests, debug, info
 from app.routes import dashboard, indexer, spots
 
 settings = get_settings()
@@ -15,7 +15,7 @@ settings = get_settings()
 app = FastAPI(title=settings.app_name)
 if DEBUG:
     app.add_middleware(DebugRequests)
-debug("startup", data_dir=settings.data_dir)
+info("startup", data_dir=settings.data_dir)
 
 app.add_middleware(
     CORSMiddleware,

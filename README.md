@@ -73,6 +73,7 @@ Application code and data outputs live on the host and are bind-mounted at runti
 | `./app`, `./scripts` | `/app/app:ro`, `/app/scripts:ro` | Backend code and CLI tools. Live-mounted; update with `git pull` + restart. |
 | `${MASTER_FRONTEND_CONTEXT:-../cem-master-frontend}` | `/usr/share/nginx/html:ro` | Frontend HTML/JS/CSS assets. Live-mounted. |
 | `${CEM_DATA_DIR_HOST}` | `/data:ro` | Shared compute data directory (`cem-backend/data`). Mounted read-only for public indexing and audio streaming. |
+| `${CEM_DATA_DIR_HOST}/logs/cem-master-backend` | `/data/logs/cem-master-backend:rw` | Persistent application log directory. |
 
 ---
 
@@ -123,12 +124,13 @@ The FastAPI backend exposes the following REST routes (prefixed with `/api/v1`):
 
 ## Configuration
 
-`.env`, read automatically by Docker Compose:
+Configure the stack via `.env` (copied from `.env.example`):
 
-| Variable | Default | Purpose & Meaning |
+| Variable | Default | Purpose |
 | :--- | :--- | :--- |
 | `DATABASE_URL` | `postgresql+psycopg://cem_user:change-me@cem-database:5432/cem_master` | Container connection to PostgreSQL (`cem-database` service name). |
 | `CEM_DATA_DIR_HOST` | `../cem-backend/data` | Host path to compute output folder, mounted read-only as `/data`. |
+| `LOG_LEVEL` | `info` | Logging verbosity: `debug` (verbose traces), `info` (startup & completions), `error` (failures only). |
 | `MASTER_FRONTEND_PORT` | `8000` | Host port for the public map frontend. |
 | `BACKEND_PORT` | `8001` | Host port for the backend FastAPI service. |
 | `MASTER_FRONTEND_CONTEXT` | `../cem-master-frontend` | Relative path to the frontend repository folder. |
@@ -136,25 +138,26 @@ The FastAPI backend exposes the following REST routes (prefixed with `/api/v1`):
 | `INDEXER_POLL_SECONDS` | `30` | Polling interval for the background indexer watcher. |
 | `CORS_ORIGINS` | `http://localhost:8000,http://127.0.0.1:8000` | Allowed CORS origins. |
 | `CEM_MASTER_API_KEY` | *(blank)* | Optional key for administrative spot mutations (`POST /api/v1/spots`). |
-| `DEBUG` | `false` | Enables verbose diagnostics across API, indexer, and frontend (see `DEBUGGING.md`). |
+| `DEBUG` | `false` | Legacy alias for `LOG_LEVEL=debug` (see `DEBUGGING.md`). |
 | `TEST_DATABASE_URL` | `postgresql+psycopg://cem_user:change-me@localhost:5432/cem_master_test` | PostgreSQL URL for running pytest on your host machine. |
 
 ---
 
-## Debug Logging & Diagnostics
+## Logging & Diagnostics
 
-Setting `DEBUG=true` in `.env` enables verbose diagnostic logging across the entire master stack:
+Logging is configured via `LOG_LEVEL` (`debug` | `info` | `error`):
 
 ```bash
-# 1. Set DEBUG=true in .env
+# 1. Set LOG_LEVEL=debug (or LOG_LEVEL=info) in .env
 # 2. Recreate containers to apply the environment change:
 ./scripts/dev-up.sh -d
 docker compose logs -f backend indexer
 ```
 
-- **Backend & Indexer Diagnostics**: Logs API request timing and status, indexing inputs, missing or malformed snippet metadata, per-species indexing passes, best-clip selection logic, and audio streaming.
-- **Frontend Diagnostics**: Injects `/runtime-debug.js` to surface network timing, missing audio snippets, and playback stalls directly in the browser DevTools Console (enable *Verbose* level).
-- For complete tracing workflows and client overrides, see [`DEBUGGING.md`](DEBUGGING.md).
+- **Stdout & Persistent File**: Logs stream to stdout (`docker compose logs`) and are written persistently to `data/logs/cem-master-backend/app.log`.
+- **Backend & Indexer Diagnostics**: Logs ASGI request timing/status, indexing inputs, spot rollups, and audio snippet stream events.
+- **Frontend Diagnostics**: Injects `/runtime-debug.js` to surface network timing and snippet playback stalls in the browser console.
+- For complete details, see [`DEBUGGING.md`](DEBUGGING.md).
 
 ---
 

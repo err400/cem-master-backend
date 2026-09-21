@@ -7,14 +7,17 @@ services:
       - "${BACKEND_PORT:-8001}:8001"
     environment:
       DEBUG: ${DEBUG:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
       DATABASE_URL: "${DATABASE_URL:?Set DATABASE_URL to the cem-database PostgreSQL URL}"
       CORS_ORIGINS: "${BACKEND_CORS_ORIGINS:-http://localhost:8000,http://127.0.0.1:8000}"
       CEM_MASTER_API_KEY: "${BACKEND_API_KEY:-}"
       DATA_DIR: /data
+      LOG_DIR: /data/logs/cem-master-backend
     volumes:
       - ./app:/app/app:ro
       - ./scripts:/app/scripts:ro
       - ${CEM_DATA_DIR_HOST:-../cem-backend/data}:/data:ro
+      - ${CEM_DATA_DIR_HOST:-../cem-backend/data}/logs/cem-master-backend:/data/logs/cem-master-backend:rw
     command:
       - uvicorn
       - app.main:app
@@ -35,12 +38,15 @@ services:
       dockerfile: Dockerfile
     environment:
       DEBUG: ${DEBUG:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
       DATABASE_URL: "${DATABASE_URL:?Set DATABASE_URL to the cem-database PostgreSQL URL}"
       DATA_DIR: /data
+      LOG_DIR: /data/logs/cem-master-backend
       INDEXER_POLL_SECONDS: ${INDEXER_POLL_SECONDS:-30}
     volumes:
       - ./app:/app/app:ro
       - ${CEM_DATA_DIR_HOST:-../cem-backend/data}:/data:ro
+      - ${CEM_DATA_DIR_HOST:-../cem-backend/data}/logs/cem-master-backend:/data/logs/cem-master-backend:rw
     command:
       - python
       - -m
@@ -66,6 +72,7 @@ services:
   frontend:
     environment:
       DEBUG: ${DEBUG:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
     build:
       context: ${MASTER_FRONTEND_CONTEXT:-../cem-master-frontend}
       dockerfile: Dockerfile
