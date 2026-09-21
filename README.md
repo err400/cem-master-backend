@@ -1,92 +1,85 @@
-# CEM Master — Continuous Ecological Monitoring Catalogue
+# cem-master-backend
 
-Public biodiversity catalogue, bioacoustic indexer, and interactive map interface for the Continuous Ecological Monitoring (CEM) network.
+API, PostgreSQL database, and background **indexer** for the public CEM Master catalogue — the interactive, read-only biodiversity map at [cem-master](../cem-master).
+
+This repository starts the entire master stack.
+
+```text
+frontend (nginx :8000) ──/api/──▶ backend (FastAPI :8001) ──▶ cem-database (PostgreSQL)
+                                         │                          ▲
+                                 streams 9s audio                   │
+                                         ▼                          │
+DATA_DIR/projects/ ─────────────▶ /data (read-only) ◀──reads── indexer (--watch)
+```
+
+The API answers requests from PostgreSQL and streams 9-second audio snippet clips directly from `DATA_DIR`. The indexer runs in the background, reading public project detections and updating the database.
 
 ---
 
-## 1. Directory Mounts & Volume Layout (§1)
+## Quick start
 
-Code, models, and data are strictly separated. No application code, ML model weights, or compute outputs are baked into the Docker image. Everything is bind-mounted at runtime:
+Clone the two master repositories **side by side** — compose builds the frontend from `../cem-master` (or `../cem-master-frontend`):
+
+```text
+your-workspace/
+├── cem-master-backend/     <- start here
+└── cem-master/             <- frontend map
+```
+
+```bash
+cp .env.example .env        # set CEM_DATA_DIR_HOST to your compute data folder
+./scripts/dev-up.sh -d      # starts database + API + indexer + frontend
+```
+
+- **Map page**: <http://localhost:8000>
+- **API docs**: <http://localhost:8001/docs>
+- **Health check**: <http://localhost:8000/backend-health> or <http://localhost:8001/health>
+- **FileBrowser downloads**: <http://localhost:8097>
+
+```bash
+./scripts/dev-up.sh -d --build   # rebuild images
+./scripts/dev-up.sh down         # stop containers, keep database
+./scripts/dev-up.sh down -v      # stop AND DELETE the database
+```
+
+> **Why one owner**: This stack is managed centrally from `cem-master-backend` so that one `./scripts/dev-up.sh` brings up the whole system. The frontend repository defines no separate compose file to prevent configuration drift.
+>
+> **Live bind-mounts**: `./app` and `./scripts` in the backend, and `./index.html`, `./js`, `./styles`, `./leaflet` in the frontend are bind-mounted. Editing python or JavaScript source files only needs `docker compose restart backend` or `docker compose restart frontend`, not a full rebuild. Rebuild only when `requirements.txt`, `Dockerfile`, or `nginx.conf` changes.
+
+---
+
+## Directory Mounts & Volume Layout
+
+Application code, models, and data outputs live on the host and are bind-mounted at runtime:
 
 | Host Folder | Container Path | Purpose & Lifecycle |
 | :--- | :--- | :--- |
-| `code/` (`./app`, `./scripts`, `../cem-master-frontend`) | `/app` (or `/usr/share/nginx/html`) | Git checkout. Updated via `git pull` + container restart. |
-| `models/` (`./models`) | `/app/models` | ML model weights, classifiers, checkpoints (`.pt`, `.onnx`, `.joblib`). Preserved across restarts. |
-| `data/` (`../cem-backend/data`) | `/data` (or `/app/data`) | Input audio recordings, BirdNET detection tables, 9s audio snippets, acoustic indices, caches, and compute outputs. Mounted read-only for public indexing. |
-
-- **Job Outputs**: Written under `data/` only (never inside the container layer).
-- **Git Ignore**: `.gitignore` excludes large audio files, model weights, and generated outputs.
-- **Acceptance**: Restarting or recreating containers preserves all data, logs, and models; `git pull` updates application code without modifying `data/` or `models/`.
+| `./app`, `./scripts` | `/app/app:ro`, `/app/scripts:ro` | Backend code and CLI tools. Live-mounted; update with `git pull` + restart. |
+| `${MASTER_FRONTEND_CONTEXT:-../cem-master}` | `/usr/share/nginx/html:ro` | Frontend HTML/JS/CSS assets. Live-mounted. |
+| `${CEM_DATA_DIR_HOST}` | `/data:ro` | Shared compute data directory (`cem-backend/data`). Mounted read-only for public indexing and audio streaming. |
 
 ---
 
-## 2. Compute Orchestration: Airflow vs Local (§2)
+## Configuration
 
-The master stack handles detection indexing and data aggregation either locally or through Apache Airflow based strictly on `AIRFLOW_API_BASE` in `.env`:
+`.env`, read automatically by Docker Compose:
 
-| `AIRFLOW_API_BASE` in `.env` | Behavior |
-| :--- | :--- |
-| **Set (non-empty)** (e.g. `http://airflow:8080`) | Triggers and polls Airflow DAG (`/api/v1/dags/cem_indexing_pipeline/...`). Same-origin proxy prevents direct browser exposure to Airflow. |
-| **Empty / Unset** | Runs indexing and rollups locally within the container process (`python -m app.indexer --data-dir /data --watch`). |
-
-- **Airflow DAG ID**: Configured via `AIRFLOW_DAG_ID=cem_indexing_pipeline`.
-- **Worker Callback**: Configured via `CORESTACK_API_BASE=http://backend:8001`.
-- **Acceptance**: The exact same Docker image runs on a developer laptop (local compute) and on the cluster (Airflow orchestration) by changing `.env` alone.
-
----
-
-## 3. Docker Registry & Image Pull (§3)
-
-Production images are published to GitHub Container Registry (GHCR) and Docker Hub with dependency layers pre-cached:
-
-```bash
-# Pull backend & indexer image
-docker pull ghcr.io/corestack-org/cem-master-backend:latest
-
-# Pull unified frontend map image
-docker pull ghcr.io/corestack-org/cem-master-frontend:latest
-```
+| Variable | Default | Purpose & Meaning |
+| :--- | :--- | :--- |
+| `DATABASE_URL` | `postgresql+psycopg://cem_user:change-me@cem-database:5432/cem_master` | Container connection to PostgreSQL (`cem-database` service name). |
+| `CEM_DATA_DIR_HOST` | `../cem-backend/data` | Host path to compute output folder, mounted read-only as `/data`. |
+| `MASTER_FRONTEND_PORT` | `8000` | Host port for the public map frontend. |
+| `BACKEND_PORT` | `8001` | Host port for the backend FastAPI service. |
+| `MASTER_FRONTEND_CONTEXT` | `../cem-master` | Relative path to the frontend repository folder. |
+| `FILEBROWSER_PUBLIC_URL` | `http://localhost:8097` | Base URL used to turn job share hashes into browser download links. |
+| `INDEXER_POLL_SECONDS` | `30` | Polling interval for the background indexer watcher. |
+| `CORS_ORIGINS` | `http://localhost:8000,http://127.0.0.1:8000` | Allowed CORS origins. |
+| `CEM_MASTER_API_KEY` | *(blank)* | Optional key for administrative spot mutations (`POST /api/v1/spots`). |
+| `TEST_DATABASE_URL` | `postgresql+psycopg://cem_user:change-me@localhost:5432/cem_master_test` | PostgreSQL URL for running pytest on your host machine. |
 
 ---
 
-## 4. Authentication & Google SSO (§4)
-
-- **Public Catalog Access**: Spot viewing, species search, diurnal heatmaps, and 9s audio snippet streaming are open and read-only.
-- **Protected APIs & Spot Mutations**: Administrative operations (`POST /api/v1/spots`) and compute triggers require either:
-  1. Google Single Sign-On (OAuth 2.0 / Google Identity token), or
-  2. Administrative API key (`X-API-Key: $BACKEND_API_KEY`).
-- **Environment Variables**: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `GOOGLE_REDIRECT_URI` are loaded exclusively from `.env`. No secrets are committed to git.
-
----
-
-## 5. Logging & Observability (§5)
-
-All services write structured application logs to host-mounted storage under `data/logs/<application_name>/`:
-
-- **Host Path**: `data/logs/cem-master-backend/` (Backend & Indexer) and `data/logs/cem-master-frontend/` (Nginx/UI).
-- **Log Granularity (`LOG_LEVEL` in `.env`)**:
-  - `debug`: Verbose request/response traces, Airflow polling logs, and indexer traversal details.
-  - `info` *(Default)*: Startup notices, auth validation, indexing progress, and job summaries.
-  - `error`: Unhandled exceptions, failed jobs, Airflow connection failures, and database errors.
-
-```bash
-# Tail backend logs directly on host
-tail -f data/logs/cem-master-backend/app.log
-
-# Stream container logs via Docker Compose
-docker compose logs -f backend indexer
-```
-
----
-
-## 6. Unified Single-Origin Service (§6) & Frontend API Configuration (§7)
-
-- **Single Origin / Single Port**: The public frontend (Nginx on port `8000`) acts as the single entry point, serving static assets and reverse-proxying `/api/*` requests to the FastAPI backend (`backend:8001`) over the internal Docker network.
-- **No Hardcoded URLs**: `API_BASE_URL` in `.env` configures the backend target. It defaults to relative `/` (same-origin), ensuring the application runs out-of-the-box in local development, staging, or production without code edits.
-
----
-
-## 8. Architecture Diagram (§8)
+## Architecture Diagram
 
 ```mermaid
 flowchart TD
@@ -94,124 +87,97 @@ flowchart TD
         Browser["User Browser<br/>(http://localhost:8000)"]
     end
 
-    subgraph AppStack ["CEM Master Stack (Docker)"]
-        Frontend["Frontend (Nginx :8000)<br/>• Static HTML/CSS/JS<br/>• Same-origin /api/ proxy"]
-        Backend["Backend (FastAPI :8001)<br/>• REST API & Auth<br/>• 9s Audio Snippet Streamer"]
-        Indexer["Master Indexer (--watch)<br/>• Detection Rollups<br/>• Species Showcase Sync"]
+    subgraph MasterStack ["Master Stack (Docker)"]
+        Frontend["Frontend (Nginx :8000)<br/>• Leaflet map & markers<br/>• Diurnal charts & heatmaps<br/>• /api/ proxy to backend"]
+        Backend["Backend (FastAPI :8001)<br/>• Dashboard REST API (/api/v1)<br/>• 9-second WAV audio streaming"]
+        Indexer["Master Indexer (--watch)<br/>• Reads public projects<br/>• Computes spot & species rollups<br/>• Updates global snippet registry"]
+        DB[(PostgreSQL :5432<br/>Database: cem_master<br/>Owner: cem_user)]
     end
 
-    subgraph ComputeChoice ["Compute & Indexing Orchestration"]
-        AirflowCheck{"AIRFLOW_API_BASE set?"}
-        Airflow["Airflow-STACD Docker<br/>(DAG Trigger & Poll)"]
-        LocalWorker["Local Indexer Process<br/>(pandas in-container)"]
-    end
-
-    subgraph Storage ["Persistent Host Mounts"]
-        CentralDB[(Central PostgreSQL<br/>cem_master DB)]
-        DataDir[/"Host data/<br/>• projects/<br/>• snippets/<br/>• detections.csv"/]
-        LogsDir[/"Host data/logs/cem-master-backend/"/]
-        FileBrowser["FileBrowser Service<br/>(Artifact Download UI)"]
-        HostDataService["Host Data Service<br/>(Enforces outputs.yaml retention)"]
+    subgraph Storage ["Host Data (Read-Only)"]
+        DataDir[/"DATA_DIR/projects/<br/>• <project>/aggregate.csv<br/>• <project>/snippets/*.wav<br/>• <project>/snippets/species_snippets.json<br/>• <project>/jobs/*/job.json"/]
+        FileBrowser["FileBrowser Service (:8097)<br/>(Downloadable results)"]
     end
 
     Browser -->|HTTP :8000| Frontend
     Frontend -->|Proxy /api/*| Backend
-    Backend -->|Read/Write| CentralDB
+    Backend -->|Queries| DB
     Backend -->|Stream 9s audio| DataDir
-
-    Indexer --> AirflowCheck
-    AirflowCheck -->|Yes| Airflow
-    AirflowCheck -->|No| LocalWorker
-    Airflow -->|Write Rollups| CentralDB
-    LocalWorker -->|Write Rollups| CentralDB
-    LocalWorker -->|Read Detections| DataDir
-
-    Backend -.->|Write logs| LogsDir
-    Indexer -.->|Write logs| LogsDir
-
+    Indexer -->|Reads public data| DataDir
+    Indexer -->|Writes rollups| DB
+    Frontend -.->|Download link| FileBrowser
     DataDir --> FileBrowser
-    DataDir --> HostDataService
 ```
 
 ---
 
-## 9. Central PostgreSQL Database (§9)
+## Master Indexer & Data Flow
 
-The master stack connects to the central PostgreSQL cluster instance via standard connection strings:
+Species search and analytics span all public projects, so heavy aggregation happens during indexing, not during user page requests.
 
-```env
-DATABASE_URL=postgresql+psycopg://cem_user:change-me@cem-database:5432/cem_master
+### What the Indexer Does:
+1. Walks `DATA_DIR/projects/` and checks `project.json` (only indexing projects where `visibility == "public"`).
+2. Reads detection aggregates (`aggregate.csv`), normalizes species names, and filters sensitive/endangered IUCN categories (fail-closed).
+3. Computes:
+   - **Spot Summaries**: Species richness, total detections, active recording days.
+   - **Spot Species Summaries**: Per-bird detection counts, active days, 24-hour hourly activity array `[0..23]`, and daily/monthly time series.
+   - **Multi-Project Spots**: When multiple projects monitor the same GPS location (e.g. `IITDELHI`), each project gets its own distinct `Spot` record with unmixed hourly counts (spiderfied cleanly on the map).
+   - **9-Second Audio Snippets**: Ingests `snippets/species_snippets.json`, attaching spot-level snippets to each bird, and updating the global all-time highest-confidence showcase in `Species`.
+   - **Soundscape & Ecological Indices**: Attaches ACI, ADI, AEI, NDSI, SCI, PMR, and Kurtosis metrics.
+   - **Analysis Jobs**: Registers completed runs and FileBrowser download links.
+4. **Idempotent & Pruning**: Re-indexing unchanged projects changes nothing; removed or unpublished projects are cleanly pruned from the database.
+
+### Running the Indexer Manually:
+
+```bash
+./scripts/reindex.sh                     # index all public projects
+./scripts/reindex.sh --dry-run           # dry run report (writes nothing)
+./scripts/reindex.sh --project <name>    # index a single project
 ```
-
-- **Database Name**: `cem_master`
-- **Role Owner**: `cem_user` (Access provisioned by Server DBA)
-- **Migrations**: Managed via Alembic (`alembic upgrade head`). No SQLite is used in production.
-- **Persistence**: Recreating containers preserves all catalog data since rows reside in the central Postgres instance.
 
 ---
 
-## 10. Output Retention Policy (`outputs.yaml`) (§10)
+## Database & Schema Migrations
 
-Output lifecycle and cleanup policies under `data/` are governed by [`outputs.yaml`](outputs.yaml), enforced automatically by the host data service:
+The database is PostgreSQL (`cem_master`), owned by `cem_user`. Schema definitions are managed via Alembic:
 
-```yaml
-application: cem-master
-outputs:
-  - path: data/projects/
-    mode: public
-    ttl_days: null
-    description: Public ecological monitoring projects, detections, audio snippets, and indices
-  - path: data/logs/cem-master-backend/
-    mode: private_persistent
-    ttl_days: null
-    description: Master backend and indexer application logs
-  - path: data/scratch/
-    mode: delete
-    ttl_days: 7
-    description: Temporary extraction and indexing files; host data service deletes after 7 days
-```
-
-- **`public`**: Shareable catalog assets, 9s audio snippets, and public project detections.
-- **`private_persistent`**: Application log files kept on disk across container recreations.
-- **`delete`**: Ephemeral scratch data deleted automatically after `ttl_days`.
-
----
-
-## Quick Start & Operations
-
-### 1. Configuration Setup
 ```bash
-cp .env.example .env
-# Edit .env and verify DATABASE_URL and CEM_DATA_DIR_HOST
-```
+# Create a new migration revision
+docker compose exec backend alembic revision --autogenerate -m "description"
 
-### 2. Start the Stack
-```bash
-# Start backend, indexer, and frontend
-./scripts/dev-up.sh -d
-
-# Check running status
-docker compose ps
-```
-
-- **Frontend Map**: <http://localhost:8000>
-- **API Documentation**: <http://localhost:8001/docs>
-- **Health Check**: <http://localhost:8000/backend-health>
-
-### 3. Database Migrations & Testing
-```bash
-# Run migrations
+# Apply pending migrations
 docker compose exec backend alembic upgrade head
-
-# Run test suite
-docker compose exec backend pytest
 ```
 
-### 4. On-Demand Indexing
+### Running Tests:
+
 ```bash
-# Index all public projects
-./scripts/reindex.sh
+# In container
+docker compose exec backend python -m pytest
 
-# Re-index specific project
-./scripts/reindex.sh --project <project_name>
+# On host machine (requires TEST_DATABASE_URL)
+set -a && source .env && set +a
+python3 -m pytest
 ```
+
+---
+
+## Output Retention (`outputs.yaml`)
+
+Output lifecycle and cleanup policies under `data/` follow [`outputs.yaml`](outputs.yaml):
+
+- **`data/projects/`** (`mode: public`): Public ecological monitoring projects, detection CSVs, 9s audio snippet WAVs, and analysis assets.
+- **`data/logs/cem-master-backend/`** (`mode: private_persistent`): Application and indexer logs.
+- **`data/scratch/`** (`mode: delete`, `ttl_days: 7`): Temporary indexing files deleted after 7 days.
+
+---
+
+## Helpful Scripts
+
+| Script | Purpose |
+| :--- | :--- |
+| `scripts/dev-up.sh` | Start, stop, or rebuild the master stack (`-d`, `down`, `down -v`). |
+| `scripts/reindex.sh` | Trigger indexing on demand for all or specific projects. |
+| `scripts/seed_spots.py` | Insert sample monitoring spots for testing without raw audio data. |
+| `scripts/dev_compute_e2e.py` | End-to-end testing loop: raw audio → BirdNET → publish → index → map. |
+| `tests/fixtures/build_fixture.py` | Generate a synthetic `DATA_DIR` fixture for automated tests. |
