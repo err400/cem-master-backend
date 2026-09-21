@@ -1,6 +1,6 @@
 # cem-master-backend
 
-API, PostgreSQL database, and background **indexer** for the public CEM Master catalogue — the interactive, read-only biodiversity map at [cem-master](../cem-master).
+API, PostgreSQL database, and background **indexer** for the public CEM Master catalogue — the interactive, read-only biodiversity map and bioacoustic intelligence dashboard at [cem-master-frontend](../cem-master-frontend).
 
 This repository starts the entire master stack.
 
@@ -12,18 +12,34 @@ frontend (nginx :8000) ──/api/──▶ backend (FastAPI :8001) ──▶ ce
 DATA_DIR/projects/ ─────────────▶ /data (read-only) ◀──reads── indexer (--watch)
 ```
 
-The API answers requests from PostgreSQL and streams 9-second audio snippet clips directly from `DATA_DIR`. The indexer runs in the background, reading public project detections and updating the database.
+---
+
+## What the System Does
+
+The master website is the central public showcase for continuous ecological and bioacoustic monitoring:
+
+- **Interactive Spatial Map**: Explores monitoring spots across projects, color-coded by detection intensity, with cluster spiderfying for overlapping multi-project coordinates.
+- **Species Discovery & Showcase**: Instant search across common and scientific names, showing species network occurrence, IUCN conservation status, migration classification, taxonomy, and the **global highest-confidence 9-second focal call snippet**.
+- **Spot-Level Bioacoustics**:
+  - **Species Richness & Bird Inventory**: Detection counts, active days, and row-level `[ 9s ]` audio call audition buttons.
+  - **24-Hour Diurnal Activity Chart**: Hourly detection curves showing dawn/dusk calling patterns.
+  - **24-Hour Species Heatmap Matrix**: Normalized hourly activity heatmap for the top 20 most active species.
+  - **Soundscape Indices**: ACI (Acoustic Complexity), ADI (Diversity), AEI (Evenness), NDSI, Bioacoustic Index (BIO), and MFC.
+  - **Seasonal & Solar Metrics**: Seasonal Concentration Index (SCI), Peak-to-Median Ratio (PMR), Kurtosis, and sunrise/weather correlations.
+- **Raw Audio Recordings Browser**: Paginated raw audio files with visual waveform playback and time scrubbing.
+- **Analysis Provenance & Downloads**: Links completed analysis runs directly to FileBrowser output downloads.
+- **Master Indexer**: Continuously monitors `DATA_DIR/projects/`, automatically computes spot and species rollups from BirdNET detection tables, registers 9s audio snippets, and safely filters sensitive/endangered IUCN species (fail-closed).
 
 ---
 
 ## Quick start
 
-Clone the two master repositories **side by side** — compose builds the frontend from `../cem-master` (or `../cem-master-frontend`):
+Clone the two master repositories **side by side** — compose builds the frontend from `../cem-master-frontend`:
 
 ```text
 your-workspace/
 ├── cem-master-backend/     <- start here
-└── cem-master/             <- frontend map
+└── cem-master-frontend/    <- frontend map
 ```
 
 ```bash
@@ -50,13 +66,58 @@ cp .env.example .env        # set CEM_DATA_DIR_HOST to your compute data folder
 
 ## Directory Mounts & Volume Layout
 
-Application code, models, and data outputs live on the host and are bind-mounted at runtime:
+Application code and data outputs live on the host and are bind-mounted at runtime:
 
 | Host Folder | Container Path | Purpose & Lifecycle |
 | :--- | :--- | :--- |
 | `./app`, `./scripts` | `/app/app:ro`, `/app/scripts:ro` | Backend code and CLI tools. Live-mounted; update with `git pull` + restart. |
-| `${MASTER_FRONTEND_CONTEXT:-../cem-master}` | `/usr/share/nginx/html:ro` | Frontend HTML/JS/CSS assets. Live-mounted. |
+| `${MASTER_FRONTEND_CONTEXT:-../cem-master-frontend}` | `/usr/share/nginx/html:ro` | Frontend HTML/JS/CSS assets. Live-mounted. |
 | `${CEM_DATA_DIR_HOST}` | `/data:ro` | Shared compute data directory (`cem-backend/data`). Mounted read-only for public indexing and audio streaming. |
+
+---
+
+## API Endpoints Reference
+
+The FastAPI backend exposes the following REST routes (prefixed with `/api/v1`):
+
+### 1. Spots & Spatial Discovery
+| Method & Endpoint | Description |
+| :--- | :--- |
+| `GET /api/v1/spots` | GeoJSON FeatureCollection of public monitoring spots with coordinates, species richness, and total detections. Supports filtering by `species_id`, `migration_class`, `start_date`, and `end_date`. |
+| `GET /api/v1/spots/{spot_id}` | Metadata for a single spot (ID, name, project ID, GPS coordinates). |
+| `POST /api/v1/spots` | Administrative endpoint to register a spot (requires `X-API-Key`). |
+
+### 2. Spot Analytics & Species Details
+| Method & Endpoint | Description |
+| :--- | :--- |
+| `GET /api/v1/spots/{spot_id}/summary` | Comprehensive spot dossier: species richness, total detections, active days, soundscape indices (ACI, ADI, AEI, NDSI, BIO), 24h diurnal activity array, bird inventory with 9s call URLs, and analysis assets. |
+| `GET /api/v1/spots/{spot_id}/species/{species_id}` | Detailed observation of a bird at a spot: detection count, active days, confidence metrics, 24h calling curve, daily time series, bioacoustic/solar metrics (SCI, PMR, Kurtosis, sunrise correlation), 9s focal call snippet, and analysis jobs with download links. |
+
+### 3. Species Catalog & Global Showcase
+| Method & Endpoint | Description |
+| :--- | :--- |
+| `GET /api/v1/species` | Search and list public bird species. Supports query search (`?search=`), migration class filter (`?migration_class=`), and returns each species with its global best 9s call snippet. |
+| `GET /api/v1/species/{species_id}` | Global showcase for a species: common/scientific name, IUCN status, image & attribution, migration class, taxonomy, and the all-time highest confidence 9s audio snippet across all projects. |
+
+### 4. Audio Streaming & Snippets
+| Method & Endpoint | Description |
+| :--- | :--- |
+| `GET /api/v1/projects/{project}/snippets/{filename}` | Streams a 9-second focal call snippet `.wav` file with byte-range support (`Accept-Ranges: bytes`) for instant browser playback. |
+| `GET /api/v1/recordings/{audio_id}/stream` | Streams a full raw audio recording `.wav` file from disk. |
+
+### 5. Recordings Browser
+| Method & Endpoint | Description |
+| :--- | :--- |
+| `GET /api/v1/spots/{spot_id}/recordings` | Paginated raw audio recordings captured at a spot with date/time filters, detection counts, and species tags. |
+| `GET /api/v1/spots/{spot_id}/species/{species_id}/recordings` | Paginated raw audio recordings containing detections for a specific bird at a spot. |
+
+### 6. Environment & System
+| Method & Endpoint | Description |
+| :--- | :--- |
+| `GET /api/v1/spots/{spot_id}/environment` | Daily environmental history: sunrise/sunset times, rainfall mm, temperature min/max/mean, humidity, and severe weather indicators. |
+| `GET /api/v1/rankings/threatened-spots` | Ranking of monitoring spots ordered by presence of vulnerable/threatened species (IUCN VU). |
+| `POST /api/v1/indexer/projects/{project}` | Trigger on-demand re-indexing for a specific project. |
+| `GET /health` | Database connection and API health status. |
 
 ---
 
@@ -70,7 +131,7 @@ Application code, models, and data outputs live on the host and are bind-mounted
 | `CEM_DATA_DIR_HOST` | `../cem-backend/data` | Host path to compute output folder, mounted read-only as `/data`. |
 | `MASTER_FRONTEND_PORT` | `8000` | Host port for the public map frontend. |
 | `BACKEND_PORT` | `8001` | Host port for the backend FastAPI service. |
-| `MASTER_FRONTEND_CONTEXT` | `../cem-master` | Relative path to the frontend repository folder. |
+| `MASTER_FRONTEND_CONTEXT` | `../cem-master-frontend` | Relative path to the frontend repository folder. |
 | `FILEBROWSER_PUBLIC_URL` | `http://localhost:8097` | Base URL used to turn job share hashes into browser download links. |
 | `INDEXER_POLL_SECONDS` | `30` | Polling interval for the background indexer watcher. |
 | `CORS_ORIGINS` | `http://localhost:8000,http://127.0.0.1:8000` | Allowed CORS origins. |
@@ -159,16 +220,6 @@ docker compose exec backend python -m pytest
 set -a && source .env && set +a
 python3 -m pytest
 ```
-
----
-
-## Output Retention (`outputs.yaml`)
-
-Output lifecycle and cleanup policies under `data/` follow [`outputs.yaml`](outputs.yaml):
-
-- **`data/projects/`** (`mode: public`): Public ecological monitoring projects, detection CSVs, 9s audio snippet WAVs, and analysis assets.
-- **`data/logs/cem-master-backend/`** (`mode: private_persistent`): Application and indexer logs.
-- **`data/scratch/`** (`mode: delete`, `ttl_days: 7`): Temporary indexing files deleted after 7 days.
 
 ---
 
