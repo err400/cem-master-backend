@@ -136,7 +136,25 @@ The FastAPI backend exposes the following REST routes (prefixed with `/api/v1`):
 | `INDEXER_POLL_SECONDS` | `30` | Polling interval for the background indexer watcher. |
 | `CORS_ORIGINS` | `http://localhost:8000,http://127.0.0.1:8000` | Allowed CORS origins. |
 | `CEM_MASTER_API_KEY` | *(blank)* | Optional key for administrative spot mutations (`POST /api/v1/spots`). |
+| `DEBUG` | `false` | Enables verbose diagnostics across API, indexer, and frontend (see `DEBUGGING.md`). |
 | `TEST_DATABASE_URL` | `postgresql+psycopg://cem_user:change-me@localhost:5432/cem_master_test` | PostgreSQL URL for running pytest on your host machine. |
+
+---
+
+## Debug Logging & Diagnostics
+
+Setting `DEBUG=true` in `.env` enables verbose diagnostic logging across the entire master stack:
+
+```bash
+# 1. Set DEBUG=true in .env
+# 2. Recreate containers to apply the environment change:
+./scripts/dev-up.sh -d
+docker compose logs -f backend indexer
+```
+
+- **Backend & Indexer Diagnostics**: Logs API request timing and status, indexing inputs, missing or malformed snippet metadata, per-species indexing passes, best-clip selection logic, and audio streaming.
+- **Frontend Diagnostics**: Injects `/runtime-debug.js` to surface network timing, missing audio snippets, and playback stalls directly in the browser DevTools Console (enable *Verbose* level).
+- For complete tracing workflows and client overrides, see [`DEBUGGING.md`](DEBUGGING.md).
 
 ---
 
