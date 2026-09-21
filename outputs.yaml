@@ -1,0 +1,15 @@
+# outputs.yaml — read by the host data service
+application: cem-master-backend
+outputs:
+  - path: data/projects/
+    mode: public
+    ttl_days: null
+    description: Public project datasets, detection summaries, acoustic indices, and 9-second bird call audio snippet clips.
+  - path: data/logs/cem-master-backend/
+    mode: private_persistent
+    ttl_days: null
+    description: Application and ASGI diagnostic logs (app.log).
+  - path: data/scratch/
+    mode: delete
+    ttl_days: 7
+    description: Ephemeral working files and temporary data; host data service deletes after 7 days.

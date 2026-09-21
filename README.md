@@ -181,17 +181,33 @@ flowchart TD
 
     subgraph Storage ["Host Data (Read-Only)"]
         DataDir[/"DATA_DIR/projects/<br/>• <project>/aggregate.csv<br/>• <project>/snippets/*.wav<br/>• <project>/snippets/species_snippets.json<br/>• <project>/jobs/*/job.json"/]
+        LogsDir[/"data/logs/cem-master-backend/<br/>• app.log"/]
         FileBrowser["FileBrowser Service (:8097)<br/>(Downloadable results)"]
+        HostDataService["Host Data Service<br/>(Enforces outputs.yaml retention)"]
     end
 
     Browser -->|HTTP :8000 (UI & API)| Backend
     Backend -->|Queries| DB
     Backend -->|Stream 9s audio| DataDir
+    Backend -->|Write logs| LogsDir
     Indexer -->|Reads public data| DataDir
     Indexer -->|Writes rollups| DB
     Browser -.->|Download link| FileBrowser
     DataDir --> FileBrowser
+    HostDataService -->|Manages lifecycle| DataDir
+    HostDataService -->|Manages lifecycle| LogsDir
 ```
+
+---
+
+## Output Retention (`outputs.yaml`)
+
+Output lifecycle policies under `data/` are declared in [`outputs.yaml`](outputs.yaml) and enforced by the cluster's **Host Data Service**:
+
+- **`data/projects/`** (`mode: public`, `ttl_days: null`): Public project datasets, detection summaries, acoustic indices, and 9-second bird call audio snippets.
+- **`data/logs/cem-master-backend/`** (`mode: private_persistent`, `ttl_days: null`): Persistent application and ASGI diagnostic log files (`app.log`).
+- **`data/scratch/`** (`mode: delete`, `ttl_days: 7`): Ephemeral working files and temporary data; automatically deleted by the host data service after 7 days.
+
 
 ---
 
