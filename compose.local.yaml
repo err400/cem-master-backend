@@ -75,6 +75,8 @@ services:
       LOG_DIR: /data/logs/cem-master-backend
       LOG_LEVEL: ${LOG_LEVEL:-info}
       FRONTEND_DIR: /app/frontend
+      API_BASE_URL: "${API_BASE_URL:-}"
+      COMPUTE_FRONTEND_URL: "${COMPUTE_FRONTEND_URL:-http://127.0.0.1:8080/}"
       # The API itself never uses this -- but ./scripts/reindex.sh runs the
       # indexer INSIDE this container, so without it a manual reindex silently
       # produces rows with no output links while the `indexer` service's rows

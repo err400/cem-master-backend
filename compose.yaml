@@ -14,6 +14,8 @@ services:
       DATA_DIR: /data
       LOG_DIR: /data/logs/cem-master-backend
       FRONTEND_DIR: /app/frontend
+      API_BASE_URL: "${API_BASE_URL:-}"
+      COMPUTE_FRONTEND_URL: "${COMPUTE_FRONTEND_URL:-http://127.0.0.1:8080/}"
     volumes:
       - ./app:/app/app:ro
       - ./scripts:/app/scripts:ro
