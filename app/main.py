@@ -1,12 +1,17 @@
+import os
+from pathlib import Path
+
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.database import get_db
-from app.debug import DEBUG, DebugRequests, debug
+from app.debug import DEBUG, DebugRequests, debug, info
 from app.routes import dashboard, indexer, spots
 
 settings = get_settings()
@@ -15,7 +20,7 @@ settings = get_settings()
 app = FastAPI(title=settings.app_name)
 if DEBUG:
     app.add_middleware(DebugRequests)
-debug("startup", data_dir=settings.data_dir)
+info("startup", data_dir=settings.data_dir)
 
 app.add_middleware(
     CORSMiddleware,
@@ -38,6 +43,17 @@ def health(db: Session = Depends(get_db)) -> dict[str, str]:
     return {"status": "ok", "database": "postgresql"}
 
 
+@app.get("/backend-health")
+def backend_health(db: Session = Depends(get_db)) -> dict[str, str]:
+    return health(db)
+
+
+@app.get("/runtime-debug.js")
+def runtime_debug() -> Response:
+    content = f"globalThis.CEM_DEBUG = {'true' if DEBUG else 'false'};\n"
+    return Response(content=content, media_type="application/javascript")
+
+
 @app.get("/api/projects/{project_name}/snippets/{filename}")
 def stream_snippet_alias(
     project_name: str,
@@ -50,3 +66,17 @@ def stream_snippet_alias(
 app.include_router(spots.router)
 app.include_router(dashboard.router)
 app.include_router(indexer.router)
+
+# Unified Frontend: Serve static HTML/JS/CSS assets on the same origin / port
+_frontend_candidates = [
+    Path(os.getenv("FRONTEND_DIR", "")),
+    Path("/app/frontend"),
+    Path(__file__).resolve().parent.parent.parent / "cem-master",
+    Path(__file__).resolve().parent.parent.parent / "cem-master-frontend",
+]
+_frontend_dir = next((p for p in _frontend_candidates if p.is_dir() and (p / "index.html").is_file()), None)
+
+if _frontend_dir:
+    info("frontend.mounted", path=str(_frontend_dir))
+    app.mount("/", StaticFiles(directory=str(_frontend_dir), html=True), name="frontend")
+

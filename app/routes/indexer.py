@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.database import get_db
-from app.debug import debug
+from app.debug import debug, info
 from app.indexer import rollups, source
 from app.indexer.writer import prune_project, write
 
@@ -112,7 +112,7 @@ def index_project(
     else:
         db.commit()
 
-    debug("index.finish", project=project, dry_run=dry_run, snippets=report.snippets_indexed)
+    info("index.finish", project=project, dry_run=dry_run, snippets=report.snippets_indexed)
     return {
         "status": "dry_run" if dry_run else "indexed",
         "project": project,

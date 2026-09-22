@@ -72,6 +72,9 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://cem_user:change-me@cem-database:5432/cem_master}
       # Mirrors the cluster: the compute app writes DATA_DIR, we only read it.
       DATA_DIR: /data
+      LOG_DIR: /data/logs/cem-master-backend
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      FRONTEND_DIR: /app/frontend
       # The API itself never uses this -- but ./scripts/reindex.sh runs the
       # indexer INSIDE this container, so without it a manual reindex silently
       # produces rows with no output links while the `indexer` service's rows
@@ -85,9 +88,11 @@ services:
       - ./scripts:/app/scripts:ro
       - ./migrations:/app/migrations:ro
       - ./alembic.ini:/app/alembic.ini:ro
+      - ${MASTER_FRONTEND_CONTEXT:-../cem-master}:/app/frontend:ro
       # Shared compute DATA_DIR, READ-ONLY. Project visibility in project.json
       # decides what the indexer may publish.
       - ${CEM_DATA_DIR_HOST:-${DATA_DIR_HOST:-../cem-backend/data}}:/data:ro
+      - ${CEM_DATA_DIR_HOST:-${DATA_DIR_HOST:-../cem-backend/data}}/logs/cem-master-backend:/data/logs/cem-master-backend:rw
     # Apply migrations before serving. In the cluster this belongs in an init
     # container or a pre-deploy job rather than the app command, so that two
     # replicas starting at once cannot race each other.
@@ -96,7 +101,7 @@ services:
       - -c
       - |
         alembic upgrade head
-        exec uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload --reload-dir /app/app
+        exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/app
 
     # NOTE: the backend deliberately does NOT index at startup. Indexing a real
     # DATA_DIR takes minutes, so the container would fail its healthcheck and be
@@ -120,6 +125,8 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://cem_user:change-me@cem-database:5432/cem_master}
       DATA_DIR: /data
+      LOG_DIR: /data/logs/cem-master-backend
+      LOG_LEVEL: ${LOG_LEVEL:-info}
       INDEXER_POLL_SECONDS: ${INDEXER_POLL_SECONDS:-30}
       # Turns the share hashes recorded in job.json into download links on the
       # "Analysis jobs" table. This is the address a VISITOR'S BROWSER uses, so
@@ -146,6 +153,7 @@ services:
       # Which projects it may publish is decided by visibility in project.json,
       # not by what happens to be on disk.
       - ${CEM_DATA_DIR_HOST:-${DATA_DIR_HOST:-../cem-backend/data}}:/data:ro
+      - ${CEM_DATA_DIR_HOST:-${DATA_DIR_HOST:-../cem-backend/data}}/logs/cem-master-backend:/data/logs/cem-master-backend:rw
 
 volumes:
   cem-db-data:

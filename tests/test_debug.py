@@ -69,6 +69,51 @@ class DebugTests(unittest.TestCase):
             self.assertNotIn("private exception detail", str(log.call_args_list))
 
 
+    def test_log_level_env(self):
+        cases = [
+            ("debug", True, True, True),
+            ("info", False, True, True),
+            ("error", False, False, True),
+        ]
+        for level, expect_debug, expect_info, expect_error in cases:
+            with self.subTest(level=level):
+                code = (
+                    "from app.debug import debug, info, error; "
+                    "debug('dbg_msg'); info('inf_msg'); error('err_msg')"
+                )
+                result = subprocess.run(
+                    [sys.executable, "-c", code],
+                    env={**os.environ, "LOG_LEVEL": level, "DEBUG": ""},
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                self.assertEqual("dbg_msg" in result.stderr, expect_debug)
+                self.assertEqual("inf_msg" in result.stderr, expect_info)
+                self.assertEqual("err_msg" in result.stderr, expect_error)
+
+    def test_file_logging(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            code = (
+                "from app.debug import info; "
+                "info('file_probe', test_key='test_val')"
+            )
+            subprocess.run(
+                [sys.executable, "-c", code],
+                env={**os.environ, "LOG_DIR": tmpdir, "LOG_LEVEL": "info"},
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            log_path = os.path.join(tmpdir, "app.log")
+            self.assertTrue(os.path.isfile(log_path))
+            with open(log_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            self.assertIn("file_probe", content)
+            self.assertIn('"test_key": "test_val"', content)
+
+
 if __name__ == "__main__":
     unittest.main()
 
