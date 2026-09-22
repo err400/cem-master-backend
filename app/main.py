@@ -95,6 +95,7 @@ app.include_router(indexer.router)
 # Unified Frontend: Serve static HTML/JS/CSS assets on the same origin / port
 _frontend_candidates = [
     Path(os.getenv("FRONTEND_DIR", "")),
+    Path("/frontend"),
     Path("/app/frontend"),
     Path(__file__).resolve().parent.parent.parent / "cem-master-frontend",
 ]

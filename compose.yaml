@@ -13,13 +13,12 @@ services:
       CEM_MASTER_API_KEY: "${BACKEND_API_KEY:-}"
       DATA_DIR: /data
       LOG_DIR: /data/logs/cem-master-backend
-      FRONTEND_DIR: /app/frontend
+      FRONTEND_DIR: /frontend
       API_BASE_URL: "${API_BASE_URL:-}"
       COMPUTE_FRONTEND_URL: "${COMPUTE_FRONTEND_URL:-http://127.0.0.1:8080/}"
     volumes:
-      - ./app:/app/app:ro
-      - ./scripts:/app/scripts:ro
-      - ${MASTER_FRONTEND_CONTEXT:-../cem-master-frontend}:/app/frontend:ro
+      - .:/app:ro
+      - ${MASTER_FRONTEND_CONTEXT:-../cem-master-frontend}:/frontend:ro
       - ${CEM_DATA_DIR_HOST:-../cem-backend/data}:/data:ro
       - ${CEM_DATA_DIR_HOST:-../cem-backend/data}/logs/cem-master-backend:/data/logs/cem-master-backend:rw
     command:
@@ -48,7 +47,7 @@ services:
       LOG_DIR: /data/logs/cem-master-backend
       INDEXER_POLL_SECONDS: ${INDEXER_POLL_SECONDS:-30}
     volumes:
-      - ./app:/app/app:ro
+      - .:/app:ro
       - ${CEM_DATA_DIR_HOST:-../cem-backend/data}:/data:ro
       - ${CEM_DATA_DIR_HOST:-../cem-backend/data}/logs/cem-master-backend:/data/logs/cem-master-backend:rw
     command:

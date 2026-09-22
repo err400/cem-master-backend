@@ -74,7 +74,7 @@ services:
       DATA_DIR: /data
       LOG_DIR: /data/logs/cem-master-backend
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      FRONTEND_DIR: /app/frontend
+      FRONTEND_DIR: /frontend
       API_BASE_URL: "${API_BASE_URL:-}"
       COMPUTE_FRONTEND_URL: "${COMPUTE_FRONTEND_URL:-http://127.0.0.1:8080/}"
       # The API itself never uses this -- but ./scripts/reindex.sh runs the
@@ -83,14 +83,9 @@ services:
       # have them. Same value in both places, one source of truth below.
       FILEBROWSER_PUBLIC_URL: ${FILEBROWSER_PUBLIC_URL:-}
     volumes:
-      # compose.yaml mounts ./app and ./scripts for --reload. Migrations need to
-      # be visible too, otherwise a newly generated revision is not picked up
-      # until the image is rebuilt.
-      - ./app:/app/app:ro
-      - ./scripts:/app/scripts:ro
-      - ./migrations:/app/migrations:ro
-      - ./alembic.ini:/app/alembic.ini:ro
-      - ${MASTER_FRONTEND_CONTEXT:-../cem-master-frontend}:/app/frontend:ro
+      # Code live-mounted from host: app, scripts, migrations, alembic.ini
+      - .:/app:ro
+      - ${MASTER_FRONTEND_CONTEXT:-../cem-master-frontend}:/frontend:ro
       # Shared compute DATA_DIR, READ-ONLY. Project visibility in project.json
       # decides what the indexer may publish.
       - ${CEM_DATA_DIR_HOST:-${DATA_DIR_HOST:-../cem-backend/data}}:/data:ro
@@ -150,7 +145,7 @@ services:
       #    admin/admin; it must not be publicly reachable as-is
       FILEBROWSER_PUBLIC_URL: ${FILEBROWSER_PUBLIC_URL:-}
     volumes:
-      - ./app:/app/app:ro
+      - .:/app:ro
       # Read-only: the indexer must never write into the compute app's data.
       # Which projects it may publish is decided by visibility in project.json,
       # not by what happens to be on disk.
