@@ -65,20 +65,21 @@ cp .env.example .env        # set CEM_DATA_DIR_HOST to your compute data folder
 
 > **Single Web Container**: In alignment with cluster standards (CoreStack Item #6), backend and frontend run in a single container on port `8000`. FastAPI serves the static frontend assets on `/` and the REST API on `/api/v1/`.
 >
-> **Live bind-mounts**: `./app` and `./scripts` in the backend, and `${MASTER_FRONTEND_CONTEXT}` (`../cem-master`) in the frontend are bind-mounted. Editing python or JavaScript source files takes effect immediately upon restart or reload without a full image rebuild.
+> **Live bind-mounts**: The entire repo (`.`) and frontend assets (`${MASTER_FRONTEND_CONTEXT}`) are bind-mounted read-only. Editing Python, Alembic migrations, or JavaScript source files takes effect immediately without rebuilding the container.
 
 ---
 
-## Directory Mounts & Volume Layout
+## Directory Mounts & Volume Layout (CoreStack Checklist §1)
 
-Application code and data outputs live on the host and are bind-mounted at runtime:
+In alignment with cluster service standards (Checklist §1 and Runbook §2), the Docker image contains runtime dependencies only (`requirements.txt`). Code, frontend assets, and data live on the host and are bind-mounted at runtime:
 
 | Host Folder | Container Path | Purpose & Lifecycle |
 | :--- | :--- | :--- |
-| `./app`, `./scripts` | `/app/app:ro`, `/app/scripts:ro` | Backend code and CLI tools. Live-mounted; update with `git pull` + restart. |
-| `${MASTER_FRONTEND_CONTEXT:-../cem-master-frontend}` | `/app/frontend:ro` | Frontend HTML/JS/CSS assets, served by FastAPI on `/`. |
-| `${CEM_DATA_DIR_HOST}` | `/data:ro` | Shared compute data directory (`cem-backend/data`). Mounted read-only for public indexing and audio streaming. |
-| `${CEM_DATA_DIR_HOST}/logs/cem-master-backend` | `/data/logs/cem-master-backend:rw` | Persistent application log directory. |
+| `.` (repo checkout) | `/app:ro` | Backend code, scripts, and Alembic migrations. Live-mounted; update with `git pull` + restart without rebuilding the Docker image. |
+| `${MASTER_FRONTEND_CONTEXT:-../cem-master-frontend}` | `/app/frontend:ro` | Frontend HTML/JS/CSS assets, served directly by FastAPI on `/`. |
+| `${CEM_DATA_DIR_HOST}` | `/data:ro` | Shared compute datasets (`/data/projects/`). Mounted read-only for public catalog indexing and 9s audio streaming. |
+| `${CEM_DATA_DIR_HOST}/logs/cem-master-backend` | `/data/logs/cem-master-backend:rw` | Application and ASGI diagnostic logs (`app.log`). |
+| *(models)* | *N/A* | The master catalog performs database indexing and aggregation; no AI/ML weight checkpoints (.pt / .onnx) are used. |
 
 ---
 

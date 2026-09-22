@@ -42,6 +42,9 @@ class Settings:
             )
         )
         self.api_key = os.getenv("CEM_MASTER_API_KEY", "").strip()
+        self.api_base_url = os.getenv("API_BASE_URL", "").strip().rstrip("/")
+        self.compute_frontend_url = os.getenv("COMPUTE_FRONTEND_URL", "http://127.0.0.1:8080/").strip()
+        self.frontend_dir = os.getenv("FRONTEND_DIR", "").strip()
 
     @staticmethod
     def _parse_cors_origins(value: str) -> list[str]:

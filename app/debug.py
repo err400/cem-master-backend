@@ -98,7 +98,8 @@ class DebugRequests:
         try:
             await self.app(scope, receive, observe)
         except Exception as exc:
-            error("http.error", request_id=request_id, error=type(exc).__name__, message=str(exc))
+            # Strictly log error type only; do not dump raw str(exc) to prevent leaking secrets/paths
+            error("http.error", request_id=request_id, error=type(exc).__name__)
             raise
         finally:
             route = getattr(scope.get("route"), "path", "<unmatched>")

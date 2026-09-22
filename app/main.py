@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -51,7 +52,31 @@ def backend_health(db: Session = Depends(get_db)) -> dict[str, str]:
 @app.get("/runtime-debug.js")
 def runtime_debug() -> Response:
     content = f"globalThis.CEM_DEBUG = {'true' if DEBUG else 'false'};\n"
-    return Response(content=content, media_type="application/javascript")
+    return Response(
+        content=content,
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+    )
+
+
+@app.get("/js/config.js")
+@app.get("/config.js")
+def runtime_config(settings: Settings = Depends(get_settings)) -> Response:
+    api_base = settings.api_base_url
+    compute_frontend = settings.compute_frontend_url
+    js_content = f"""(function () {{
+  window.CEM_MASTER_CONFIG = {{
+    API_BASE_URL: {json.dumps(api_base)} || window.location.origin,
+    COMPUTE_FRONTEND_URL: {json.dumps(compute_frontend)},
+  }};
+}})();
+"""
+    return Response(
+        content=js_content,
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+    )
+
 
 
 @app.get("/api/projects/{project_name}/snippets/{filename}")
@@ -70,8 +95,8 @@ app.include_router(indexer.router)
 # Unified Frontend: Serve static HTML/JS/CSS assets on the same origin / port
 _frontend_candidates = [
     Path(os.getenv("FRONTEND_DIR", "")),
+    Path("/frontend"),
     Path("/app/frontend"),
-    Path(__file__).resolve().parent.parent.parent / "cem-master",
     Path(__file__).resolve().parent.parent.parent / "cem-master-frontend",
 ]
 _frontend_dir = next((p for p in _frontend_candidates if p.is_dir() and (p / "index.html").is_file()), None)
