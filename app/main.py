@@ -71,7 +71,6 @@ app.include_router(indexer.router)
 _frontend_candidates = [
     Path(os.getenv("FRONTEND_DIR", "")),
     Path("/app/frontend"),
-    Path(__file__).resolve().parent.parent.parent / "cem-master",
     Path(__file__).resolve().parent.parent.parent / "cem-master-frontend",
 ]
 _frontend_dir = next((p for p in _frontend_candidates if p.is_dir() and (p / "index.html").is_file()), None)
