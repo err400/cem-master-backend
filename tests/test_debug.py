@@ -58,15 +58,20 @@ class DebugTests(unittest.TestCase):
             self.assertNotIn("secret", str(log.call_args_list))
             self.assertNotIn("private.wav", str(log.call_args_list))
 
-    def test_exception_propagates(self):
+    def test_exception_propagates_and_does_not_leak_details(self):
         async def app(scope, receive, send):
-            raise RuntimeError("private exception detail")
+            raise RuntimeError("private database password or schema detail")
 
-        with patch.object(diagnostics, "DEBUG", True), patch.object(diagnostics, "debug") as log:
+        with patch.object(diagnostics, "DEBUG", True), \
+             patch.object(diagnostics, "debug") as log_debug, \
+             patch.object(diagnostics, "error") as log_error:
             with self.assertRaises(RuntimeError):
                 asyncio.run(diagnostics.DebugRequests(app)({"type": "http", "method": "GET"}, None, None))
-            self.assertEqual(log.call_args.kwargs["status"], 500)
-            self.assertNotIn("private exception detail", str(log.call_args_list))
+            self.assertEqual(log_debug.call_args.kwargs["status"], 500)
+            self.assertNotIn("private database password or schema detail", str(log_debug.call_args_list))
+            self.assertNotIn("private database password or schema detail", str(log_error.call_args_list))
+            self.assertEqual(log_error.call_args.kwargs["error"], "RuntimeError")
+            self.assertNotIn("message", log_error.call_args.kwargs)
 
 
     def test_log_level_env(self):
