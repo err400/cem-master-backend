@@ -169,34 +169,64 @@ docker compose logs -f backend indexer
 ## Architecture Diagram
 
 ```mermaid
-flowchart TD
-    subgraph Client ["Client Browser"]
-        Browser["User Browser<br/>(http://localhost:8000)"]
+flowchart LR
+    Browser["User browser<br/>http://localhost:8000"]
+
+    subgraph Runtime["Docker runtime"]
+        App["backend service<br/>FastAPI on port 8000<br/>serves UI and API<br/>no separate frontend container"]
+        Indexer["indexer service<br/>watch mode<br/>builds catalog rollups"]
     end
 
-    subgraph MasterStack ["Master Stack (Docker)"]
-        Backend["Unified App (FastAPI :8000)<br/>• Serves Leaflet Map UI on /<br/>• Serves REST API on /api/v1<br/>• Dynamic /runtime-debug.js<br/>• 9-second WAV audio streaming"]
-        Indexer["Master Indexer (--watch)<br/>• Reads public projects<br/>• Computes spot & species rollups<br/>• Updates global snippet registry"]
-        DB[(PostgreSQL :5432<br/>Database: cem_master<br/>Owner: cem_user)]
+    subgraph MountedCode["Mounted code"]
+        BackendCode["cem-master-backend<br/>mounted at /app<br/>read only"]
+        FrontendCode["cem-master-frontend<br/>mounted at /frontend<br/>read only"]
     end
 
-    subgraph Storage ["Host Data (Read-Only)"]
-        DataDir[/"DATA_DIR/projects/<br/>• <project>/aggregate.csv<br/>• <project>/snippets/*.wav<br/>• <project>/snippets/species_snippets.json<br/>• <project>/jobs/*/job.json"/]
-        LogsDir[/"data/logs/cem-master-backend/<br/>• app.log"/]
-        FileBrowser["FileBrowser Service (:8097)<br/>(Downloadable results)"]
-        HostDataService["Host Data Service<br/>(Enforces outputs.yaml retention)"]
+    subgraph HostData["Host data"]
+        Projects["data/projects<br/>public project outputs<br/>snippet audio<br/>job metadata"]
+        Logs["data/logs/cem-master-backend<br/>app.log"]
+        Retention["outputs.yaml<br/>public<br/>private persistent<br/>delete"]
     end
 
-    Browser -->|HTTP :8000 (UI & API)| Backend
-    Backend -->|Queries| DB
-    Backend -->|Stream 9s audio| DataDir
-    Backend -->|Write logs| LogsDir
-    Indexer -->|Reads public data| DataDir
-    Indexer -->|Writes rollups| DB
-    Browser -.->|Download link| FileBrowser
-    DataDir --> FileBrowser
-    HostDataService -->|Manages lifecycle| DataDir
-    HostDataService -->|Manages lifecycle| LogsDir
+    subgraph SharedServices["Shared services"]
+        DB[("central PostgreSQL<br/>cem_master")]
+        FileBrowser["FileBrowser<br/>download UI"]
+        DataService["host data service<br/>retention worker"]
+    end
+
+    Browser -->|"same origin UI"| App
+    Browser -->|"same origin API"| App
+
+    BackendCode -->|"application code"| App
+    BackendCode -->|"indexer code"| Indexer
+    FrontendCode -->|"static assets"| App
+
+    App -->|"read audio and job metadata"| Projects
+    App -->|"write application logs"| Logs
+    App -->|"query catalog"| DB
+
+    Indexer -->|"read public projects"| Projects
+    Indexer -->|"write rollup tables"| DB
+    Indexer -->|"write indexer logs"| Logs
+
+    Browser -.->|"download links"| FileBrowser
+    FileBrowser -->|"serves project outputs"| Projects
+
+    Retention -->|"policy file"| DataService
+    DataService -->|"publish or keep or delete"| Projects
+    DataService -->|"preserve logs"| Logs
+
+    classDef client fill:#f5f7ff,stroke:#6d77c8,color:#1f2555
+    classDef container fill:#e8f2ff,stroke:#2f6fed,color:#10233f
+    classDef code fill:#f3ecff,stroke:#7d4cc2,color:#291642
+    classDef storage fill:#edf7ed,stroke:#4d9f4d,color:#173817
+    classDef service fill:#fff4df,stroke:#c47f00,color:#3f2a00
+
+    class Browser client
+    class App,Indexer container
+    class BackendCode,FrontendCode code
+    class Projects,Logs,Retention storage
+    class DB,FileBrowser,DataService service
 ```
 
 ---
