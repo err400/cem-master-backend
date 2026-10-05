@@ -100,13 +100,13 @@ The Docker image contains runtime dependencies only (`requirements.txt`). Code, 
 
 ## Local setup
 
-Start with [Local setup: clone → configure → migrate → run](docs/local-setup.md).
+Start with [Local setup: clone → configure → migrate → run](https://github.com/err400/cem-master-backend/blob/yuvika_branch/docs/local-setup.md).
 It includes the repository links, commands and clickable localhost URLs.
 For local setup you only need the local steps; skip production configuration.
 
 ## Setup and deployment
 
-Start with [CEM_SETUP_GUIDE.md](CEM_SETUP_GUIDE.md). It contains the four repository
+Start with [CEM_SETUP_GUIDE.md](https://github.com/err400/cem-master-backend/blob/yuvika_branch/CEM_SETUP_GUIDE.md). It contains the four repository
 clone commands, complete environment reference, private credential generation,
 Alembic steps, local/server startup, deployment URLs and proxy-prefix checks.
 Copying `.env.example` alone is not a production setup.
@@ -185,7 +185,7 @@ Species search and analytics span all public projects, so heavy aggregation happ
 
 These helper commands target the local Compose stack. For production, use
 the equivalent `python -m app.indexer` command with the deployment overlays
-from [CEM_SETUP_GUIDE.md](CEM_SETUP_GUIDE.md).
+from [CEM_SETUP_GUIDE.md](https://github.com/err400/cem-master-backend/blob/yuvika_branch/CEM_SETUP_GUIDE.md).
 
 ## API reference
 
@@ -265,7 +265,7 @@ data before production updates; `down -v` deletes the database volume.
 
 ## Output Retention (`outputs.yaml`)
 
-Output lifecycle policies under `data/` are declared in [`outputs.yaml`](outputs.yaml) for integration with a cluster **Host Data Service**, when that service is configured:
+Output lifecycle policies under `data/` are declared in [`outputs.yaml`](https://github.com/err400/cem-master-backend/blob/yuvika_branch/outputs.yaml) for integration with a cluster **Host Data Service**, when that service is configured:
 
 - **`data/projects/`** (`mode: public`, `ttl_days: null`): Public project datasets, detection summaries, acoustic indices, and 9-second bird call audio snippets.
 - **`data/logs/cem-master-backend/`** (`mode: private_persistent`, `ttl_days: null`): Persistent application and ASGI diagnostic log files (`app.log`).
@@ -287,10 +287,10 @@ and job outputs. Keep these policies consistent with the deployed storage plan.
 
 ## Documentation
 
-- [Setup and environment reference](CEM_SETUP_GUIDE.md)
-- [Publication and indexer troubleshooting](docs/first-time-local-publication.md)
-- [Testing and user workflow](HOW_TO_TEST.md)
-- [Backend logging](DEBUGGING.md)
+- [Setup and environment reference](https://github.com/err400/cem-master-backend/blob/yuvika_branch/CEM_SETUP_GUIDE.md)
+- [Publication and indexer troubleshooting](https://github.com/err400/cem-master-backend/blob/yuvika_branch/docs/first-time-local-publication.md)
+- [Testing and user workflow](https://github.com/err400/cem-master-backend/blob/yuvika_branch/HOW_TO_TEST.md)
+- [Backend logging](https://github.com/err400/cem-master-backend/blob/yuvika_branch/DEBUGGING.md)
 - [Master frontend](https://github.com/err400/cem-master-frontend)
 - [Compute backend](https://github.com/err400/cem-backend)
 - [Compute frontend](https://github.com/err400/cem-frontend)
