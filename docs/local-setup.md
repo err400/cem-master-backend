@@ -1,290 +1,171 @@
-# Local setup
+# Local setup: start here
 
-Everything needed to run the full stack on your own machine. Roughly five
-minutes.
+For a fresh local installation, use Docker Desktop (running) or Docker Engine
+with Compose v2, Git, Python 3 and Bash. On Windows use WSL with Docker
+integration. These commands use a new `cem-master` folder in your current
+directory; choose a different location if that folder already exists.
 
-## The stack: three containers
-
-```
-   your browser
-        │  http://localhost:8000        ← the ONLY origin the browser knows
-        ▼
-┌───────────────────┐
-│ frontend  (nginx) │  cem-master-frontend/compose.yaml
-│ 8000 → 80         │  serves index.html/js/styles, proxies /api/ onward
-└─────────┬─────────┘
-          │  proxy_pass http://backend:8001      (Docker DNS, service name)
-          ▼
-┌───────────────────┐
-│ backend  (FastAPI)│  cem-master-backend/compose.yaml + compose.local.yaml
-│ 8001              │  runs `alembic upgrade head`, then uvicorn
-└─────────┬─────────┘
-          │  postgresql+psycopg://…@cem-database:5432
-          ▼
-┌───────────────────┐
-│ cem-database      │  cem-master-backend/compose.local.yaml
-│ postgis:16-3.4    │  volume cem_master_db_data
-│ 5432              │
-└───────────────────┘
-
-all three attached to the docker network: cem_master_network
-```
-
-Because nginx proxies `/api/`, the browser only ever talks to port 8000 — there
-is no CORS in the picture at all. Ports 8001 and 5432 are published purely so
-you can reach them from your own machine with `curl`, `psql` and `pytest`.
-
-**One service, one owner.** The frontend repo used to define its own `backend`
-service too; that was removed. See "Why the frontend no longer builds the
-backend" below.
-
-## What changed, and why you need to read this
-
-Three behavioural changes. All three will confuse you if you don't know about
-them:
-
-1. **`uvicorn` alone no longer creates database tables.** `create_all` was
-   removed (correctly — it only ever created *missing* tables and silently
-   ignored changes to existing ones, so schema changes were no-ops). Schema is
-   now managed by Alembic: run `alembic upgrade head` before starting the app.
-   The Docker path does this for you.
-
-2. **There was previously no way to create the schema at all.** After
-   `create_all` was removed nothing replaced it, so a fresh database left every
-   query failing on missing tables — while `/health` still returned `200`,
-   because `SELECT 1` succeeds against an empty database. If you were seeing
-   that, this is why.
-
-3. **The frontend no longer waits for the backend.** It used to be gated on the
-   backend's healthcheck. Now the page loads regardless and API calls return
-   `502` if the backend is down. That is deliberate — see below.
-
-## First run
+## 1. Clone the repositories
 
 ```bash
-git pull
-
-# Compose reads .env automatically; without it DATABASE_URL is unset and
-# compose.yaml fails hard on `:?`
-cp .env.example .env
-
-# Start Docker Desktop, then:
-./scripts/dev-up.sh
+mkdir cem-master
+cd cem-master
+export CEM_WORKSPACE="$PWD"
+git clone https://github.com/err400/cem-backend.git cem-backend
+git clone https://github.com/err400/cem-frontend.git cem-frontend
+git clone https://github.com/err400/cem-master-backend.git cem-master-backend
+git clone https://github.com/err400/cem-master-frontend.git cem-master-frontend
+docker info
+docker compose version
 ```
 
-`dev-up.sh` creates the `cem_master_network` docker network if missing, starts
-PostgreSQL, waits for it to accept connections, applies migrations, and starts
-the API on **http://localhost:8001**.
+All four repositories must be siblings. For existing checkouts, skip cloning,
+set `CEM_WORKSPACE` to their parent folder, and retain existing credentials.
 
-Watch for this in the logs — it means the schema was created:
+## 2. Configure once
 
-```
-INFO  [alembic.runtime.migration] Running upgrade  -> 79ea7b4cc34e, baseline postgres schema
-```
-
-Useful flags:
+For a fresh database, create the private configuration files:
 
 ```bash
-./scripts/dev-up.sh -d          # background, frees the terminal
-./scripts/dev-up.sh down        # stop, keep the database
-./scripts/dev-up.sh down -v     # stop AND DELETE the database volume
+cd "$CEM_WORKSPACE/cem-backend"
+test -f .env || cp .env.example .env
+mkdir -p data/projects logs
+cd "$CEM_WORKSPACE/cem-master-backend"
+test -f .env || cp .env.example .env
 ```
 
-### Then the frontend
-
-Separate repo, separate compose file, started second:
+Run this block once to set shared-data paths, generate matching private database
+credentials, and set local browser URLs. Do not run it against an existing
+configured PostgreSQL volume; retain that database's credentials.
 
 ```bash
-cd ../cem-master-frontend
-docker compose up               # no .env needed here any more
+cd "$CEM_WORKSPACE"
+python3 - <<'CONFIG'
+import os
+import secrets
+from pathlib import Path
+
+root = Path(os.environ["CEM_WORKSPACE"]).resolve()
+os.umask(0o077)
+def update(path, values):
+    lines = path.read_text().splitlines()
+    lines = [line for line in lines if line.split("=", 1)[0] not in values]
+    lines.extend(f"{key}={value}" for key, value in values.items())
+    path.chmod(0o600)
+    path.write_text("\n".join(lines) + "\n")
+
+password = secrets.token_hex(24)
+update(root / "cem-backend/.env", {
+    "CEM_DATA_DIR_HOST": str(root / "cem-backend/data"),
+    "COMPUTE_FRONTEND_CONTEXT": str(root / "cem-frontend"),
+    "SERVER_BASE_URL": "http://localhost:8002",
+    "ALLOWED_ORIGINS": "http://localhost:8080,http://127.0.0.1:8080",
+    "FILEBROWSER_BASE_URL": "",
+    "RETENTION_HOURS": "0",
+})
+update(root / "cem-master-backend/.env", {
+    "CEM_DATA_DIR_HOST": str(root / "cem-backend/data"),
+    "MASTER_FRONTEND_CONTEXT": str(root / "cem-master-frontend"),
+    "POSTGRES_USER": "cem_user",
+    "POSTGRES_PASSWORD": password,
+    "BACKEND_API_KEY": secrets.token_hex(32),
+    "POSTGRES_DB": "cem_master",
+    "DATABASE_URL": f"postgresql+psycopg://cem_user:{password}@cem-database:5432/cem_master",
+    "TEST_DATABASE_URL": f"postgresql+psycopg://cem_user:{password}@127.0.0.1:5432/cem_master_test",
+    "BACKEND_CORS_ORIGINS": "http://localhost:8000,http://127.0.0.1:8000",
+    "API_BASE_URL": "",
+    "COMPUTE_FRONTEND_URL": "http://localhost:8080/",
+    "FILEBROWSER_PUBLIC_URL": "",
+})
+CONFIG
+chmod 600 cem-backend/.env cem-master-backend/.env
 ```
 
-Open **http://localhost:8000**.
+**No production configuration is needed for this local setup.**
 
-Order matters only in that `cem_master_network` must exist — `dev-up.sh` creates
-it. If you start the frontend first you will get
-`network cem_master_network declared as external, but could not be found`; run
-`docker network create cem_master_network` or just start the backend first.
+Local URL settings are:
 
-You should end up with exactly three containers:
-
-```
-$ docker ps --format 'table {{.Names}}\t{{.Ports}}'
-NAMES                             PORTS
-cem-master-frontend-frontend-1    0.0.0.0:8000->80/tcp
-cem-master-backend-backend-1      0.0.0.0:8001->8001/tcp
-cem-master-backend-cem-database-1 0.0.0.0:5432->5432/tcp
-```
-
-**Two backend containers means something is wrong** — see the next section.
-
-## Why the frontend no longer builds the backend
-
-`cem-master-frontend/compose.yaml` used to define a `backend` service of its own,
-built from `../cem-master-backend`. It was removed, because two files defining
-the same service caused four real problems:
-
-- **Port clash.** Both published 8001, so running both stacks failed — or worse,
-  left you talking to a backend you did not think you were talking to.
-- **Silent drift.** Change the command, env or mounts in one file and not the
-  other, and behaviour depends on which file you happened to start from. Both
-  look correct in isolation.
-- **No database.** The frontend repo has no db service, so *its* backend pointed
-  at a `cem-database` host that did not exist, failed its healthcheck, and —
-  because the frontend was gated on `service_healthy` — **the frontend never
-  started either.** A missing database in one repo silently prevented the other
-  repo's UI from loading.
-- **Fragile build context.** `context: ../cem-master-backend` assumed a sibling
-  checkout on the right branch, and made the frontend repo responsible for
-  knowing how to build the backend.
-
-Now the frontend simply joins `cem_master_network`. `nginx.conf` is unchanged —
-it still proxies to `http://backend:8001`, and Docker DNS resolves that to
-whichever container provides the `backend` service.
-
-The trade-off: with `depends_on` gone the frontend starts even when the backend
-is down, and `/api/` calls return `502`. That is the better failure mode — a
-visible API error is far easier to diagnose than a container that refuses to
-start for reasons in another repository.
-
-`DATABASE_URL` is no longer referenced anywhere in the frontend repo, so **no
-`.env` is needed there**. `.env.example` in that repo is now just
-`FRONTEND_PORT`.
-
-## Check it worked
-
-In a second terminal:
-
-```bash
-cd cem-master-backend
-
-# 9 tables: the 8 models plus alembic_version
-docker compose -f compose.yaml -f compose.local.yaml exec cem-database \
-  psql -U cem_user -d cem_master -c '\dt'
-
-# empty FeatureCollection is the correct answer on a fresh database
-curl -s localhost:8001/api/v1/spots
-
-# sample data, so the frontend has something to draw
-docker compose -f compose.yaml -f compose.local.yaml exec backend \
-  python scripts/seed_spots.py
-```
-
-## Running the indexer
-
-The indexer turns the compute app's `aggregate.csv` into the rows the map reads.
-**Run it inside the container** — it already has the dependencies, `DATA_DIR`
-mounted read-only, and `DATABASE_URL` set, and this is the same way it will run in
-the cluster:
-
-```bash
-python3 tests/fixtures/build_fixture.py    # from the host; stdlib only, no venv
-./scripts/reindex.sh --dry-run             # compute and report, write nothing
-./scripts/reindex.sh                       # write
-```
-
-`DATA_DIR` in the container defaults to the generated fixture
-(`compose.local.yaml`). Point `DATA_DIR_HOST` at a real tree to index that
-instead. The fixture must be built from the host, because the container mounts
-`DATA_DIR` read-only.
-
-After a successful run, reload http://localhost:8000 — the fixture's spots appear
-on the map with numbers that trace back to a CSV you can count by hand.
-
-Nothing needs installing on your own machine for this. If you *want* to run it
-directly for debugging, you need a virtualenv with `requirements.txt` installed
-(the indexer uses pandas) and the **host-side** database URL — `@localhost:5432`,
-not `@cem-database`.
-
-## Running the tests
-
-The suite needs a real PostgreSQL — `app/config.py` rejects non-PostgreSQL URLs,
-and the models use `JSONB`, which SQLite cannot create. `scripts/initdb` already
-created the `cem_master_test` database for you.
-
-```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt -r requirements-dev.txt
-
-set -a && source .env && set +a      # loads TEST_DATABASE_URL
-pytest
-```
-
-Without `TEST_DATABASE_URL` the suite skips rather than fails, and says so in the
-report header.
-
-## Two DATABASE_URLs, and why
-
-This trips everyone once:
-
-| Who is connecting | Host | Database |
+| File | Setting | Local value |
 |---|---|---|
-| The backend **container** | `cem-database` | `cem_master` |
-| **You**, from your machine (pytest, psql, alembic) | `localhost` | `cem_master_test` |
+| compute `.env` | `SERVER_BASE_URL` | `http://localhost:8002` |
+| compute `.env` | `ALLOWED_ORIGINS` | `http://localhost:8080,http://127.0.0.1:8080` |
+| master `.env` | `API_BASE_URL` | Blank (same-origin API on port 8000) |
+| master `.env` | `COMPUTE_FRONTEND_URL` | `http://localhost:8080/` |
+| master `.env` | `BACKEND_CORS_ORIGINS` | `http://localhost:8000,http://127.0.0.1:8000` |
 
-`localhost` inside the backend container is the container itself, not the
-database. `dev-up.sh` warns if `DATABASE_URL` looks like a host-side URL.
+Do not put the deployed IITD URL/prefix into a local environment. Both data
+mounts must name the same compute data folder.
 
-## Changing the schema
+## 3. Build, migrate and start
 
-```bash
-# 1. edit app/models.py, then generate a migration
-alembic revision --autogenerate -m "describe the change"
-
-# 2. READ the generated file in migrations/versions/ before applying it --
-#    autogenerate is good, not infallible
-
-# 3. see exactly what SQL it will run, without touching a database
-alembic upgrade base:head --sql
-
-# 4. apply
-alembic upgrade head
-```
-
-Never edit an applied migration; add a new one. `alembic current` shows where a
-database is, `alembic history` shows the chain.
-
-`tests/test_migrations.py` fails if models and migrations drift apart — if it
-goes red, you almost certainly forgot step 1.
-
-## If something is wrong
-
-**`required variable DATABASE_URL is missing a value`** — no `.env` file.
-`cp .env.example .env`.
-
-**`Cannot connect to the Docker daemon`** — Docker Desktop isn't running.
-
-**`relation "spots" does not exist`** — migrations didn't run. If you started the
-app outside Docker, run `alembic upgrade head` first.
-
-**`Can't locate revision`, or a half-created schema** — the volume is in a state
-that predates the current migrations. Reset it:
+Run in order and stop on any failed command:
 
 ```bash
-./scripts/dev-up.sh down -v && ./scripts/dev-up.sh
+cd "$CEM_WORKSPACE/cem-backend"
+docker compose config --quiet
+docker compose up --build -d api frontend
+
+cd "$CEM_WORKSPACE/cem-master-backend"
+docker network inspect cem_master_network >/dev/null 2>&1 || docker network create cem_master_network
+cem_compose() { docker compose -f compose.yaml -f compose.local.yaml "$@"; }
+cem_compose config --quiet
+cem_compose build backend indexer
+cem_compose run --rm --no-deps --user root backend sh -ec 'mkdir -p /data/logs/cem-master-backend; chown cem:cem /data/logs/cem-master-backend'
+cem_compose up -d cem-database
 ```
 
-**`psql: database "cem_master_test" does not exist`** — `scripts/initdb` only
-runs when the data volume is first created. Same reset as above.
+Check readiness; repeat until PostgreSQL reports `accepting connections`:
 
-**Two backend containers in `docker ps`** — you are running an old
-`cem-master-frontend/compose.yaml` that still defines its own `backend`. Pull the
-frontend repo, then `docker compose down` and `up` there to recreate.
+```bash
+cem_compose exec -T cem-database pg_isready -U cem_user -d cem_master
+```
 
-**`network cem_master_network declared as external, but could not be found`** —
-start the backend stack first, or `docker network create cem_master_network`.
+Then apply the existing migrations before starting the indexer:
 
-**Frontend loads but every panel shows an error** — the backend is down or still
-migrating. Check `curl -s localhost:8001/health`; expect
-`{"status":"ok","database":"postgresql"}`. This is the intended behaviour now
-that the frontend no longer waits for the backend.
+```bash
+cem_compose run --rm --no-deps backend python -m alembic upgrade head
+cem_compose up -d backend indexer
+cem_compose ps
+```
 
-**The map is empty** — correct on a fresh database. Run the seed script above.
+Docker installs Python dependencies, including Alembic. No host pip installation
+or new migration generation is required.
 
----
+## 4. Open and verify
 
-## One thing worth being clear about
+- [Compute website](http://localhost:8080)
+- [Compute API docs](http://localhost:8002/docs)
+- [Master website](http://localhost:8000)
+- [Master API docs](http://localhost:8000/docs)
 
-The stack runs end to end, but **every number the UI currently shows is
-fabricated by `scripts/seed_spots.py`**. No detection has yet come from a BirdNET
-run.
+```bash
+curl --fail http://localhost:8002/health
+curl --fail http://localhost:8000/health
+curl --fail http://localhost:8000/api/v1/spots
+cem_compose exec -T backend python -m alembic current
+```
+
+An empty master map is normal before publication. The master backend serves the
+frontend; no separate master frontend container is needed.
+
+Use [HOW_TO_TEST.md](../HOW_TO_TEST.md) to upload audio, run server BirdNET and
+publish. See [publication troubleshooting](first-time-local-publication.md) if
+data is missing. Use [CEM_SETUP_GUIDE.md](../CEM_SETUP_GUIDE.md) for the full
+production environment reference and server-specific proxy configuration.
+
+## Later starts and logs
+
+In a new terminal, set `CEM_WORKSPACE` to the cloned parent folder again:
+
+```bash
+cd "$CEM_WORKSPACE/cem-backend"
+docker compose up -d api frontend
+cd "$CEM_WORKSPACE/cem-master-backend"
+cem_compose() { docker compose -f compose.yaml -f compose.local.yaml "$@"; }
+cem_compose up -d
+cem_compose logs --tail=100 backend indexer
+```
+
+For source/dependency updates, use the build and migration sequence in the full
+guide. Stop with `docker compose down` in compute and `cem_compose down` in
+master; omit `-v` to retain the database.
