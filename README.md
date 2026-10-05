@@ -21,53 +21,81 @@ The master website is the central public showcase for continuous ecological and 
 
 ## Architecture
 
-### How public data reaches the website
-
-```mermaid
-flowchart TD
-    Researcher["Researcher"] --> Compute["Compute UI and API"]
-    Compute -->|"Analysis and Make Public"| Data["Shared project data"]
-    Data -->|"Read public projects"| Indexer["Master indexer"]
-    Indexer -->|"Write summaries"| DB[("PostgreSQL")]
-    Visitor["Visitor"] --> App["Master UI and API"]
-    App -->|"Query summaries"| DB
-    App -->|"Stream recordings"| Data
-```
-
-Master serves its frontend and API in one container; the indexer runs separately.
-It does not run BirdNET. Compute chooses local execution or Airflow using
-`AIRFLOW_BASE_URL`; the blank/set execution paths are shown in the
-[compute architecture](https://github.com/err400/cem-backend/blob/master/README.md#architecture).
-Cluster deployments use central PostgreSQL; local development uses the database
-overlay. The single-server deployment option is described separately in the guide.
-
-### Where files live
-
 ```mermaid
 flowchart LR
-    Code["Backend code and UI assets"] --> Runtime["Master API and indexer"]
-    Data["Shared data: read only"] --> Runtime
-    Runtime --> Logs["Persistent logs"]
-    Data --> FB["FileBrowser: optional"]
-    Policy["outputs.yaml"] -.-> Host["External host data service"]
-    Host -.->|"Enforce retention"| Data
+    Browser["User browser<br/>http://localhost:8000"]
+
+    subgraph Runtime["Docker runtime"]
+        App["backend service<br/>FastAPI on port 8000<br/>serves UI and API<br/>no separate frontend container"]
+        Indexer["indexer service<br/>watch mode<br/>builds catalog rollups"]
+    end
+
+    subgraph MountedCode["Mounted code"]
+        BackendCode["cem-master-backend<br/>mounted at /app<br/>read only"]
+        FrontendCode["cem-master-frontend<br/>mounted at /frontend<br/>read only"]
+    end
+
+    subgraph HostData["Host data"]
+        Projects["data/projects<br/>shared compute projects<br/>original WAVs, outputs and snippets<br/>master reads at /data"]
+        Logs["data/logs/cem-master-backend<br/>app.log<br/>LOG_LEVEL: debug / info / error"]
+        Retention["outputs.yaml<br/>public: projects, no TTL<br/>private_persistent: logs, no TTL<br/>delete: scratch, 7 days"]
+    end
+
+    subgraph SharedServices["Shared services"]
+        Compute["compute service<br/>analysis and Make Public"]
+        DB[("central PostgreSQL<br/>cem_master")]
+        FileBrowser["optional FileBrowser<br/>download UI"]
+        DataService["external host data service<br/>not started by Compose"]
+    end
+
+    Compute -->|"write results and project visibility"| Projects
+
+    Browser -->|"same origin UI"| App
+    Browser -->|"same origin API"| App
+
+    BackendCode -->|"application code"| App
+    BackendCode -->|"indexer code"| Indexer
+    FrontendCode -->|"static assets"| App
+
+    App -->|"read audio and job metadata"| Projects
+    App -->|"write application logs"| Logs
+    App -->|"query catalog"| DB
+
+    Indexer -->|"read public projects"| Projects
+    Indexer -->|"write rollup tables"| DB
+    Indexer -->|"write indexer logs"| Logs
+
+    Browser -.->|"download links"| FileBrowser
+    FileBrowser -->|"serves project outputs"| Projects
+
+    Retention -.->|"policy file: requires host integration"| DataService
+    DataService -.->|"publish or keep or delete"| Projects
+    DataService -.->|"preserve logs"| Logs
+
+    classDef client fill:#f5f7ff,stroke:#6d77c8,color:#1f2555
+    classDef container fill:#e8f2ff,stroke:#2f6fed,color:#10233f
+    classDef code fill:#f3ecff,stroke:#7d4cc2,color:#291642
+    classDef storage fill:#edf7ed,stroke:#4d9f4d,color:#173817
+    classDef service fill:#fff4df,stroke:#c47f00,color:#3f2a00
+
+    class Browser client
+    class App,Indexer container
+    class BackendCode,FrontendCode code
+    class Projects,Logs,Retention storage
+    class DB,FileBrowser,DataService,Compute service
 ```
 
-| Resource | Location / behavior |
-|---|---|
-| Backend code | Host checkout → `/app`, read only |
-| UI assets | Host `cem-master-frontend` → `/frontend`, read only; served by the API |
-| Models | **Not applicable to master**; compute's separate model mount is still pending |
-| Inputs and results | Same compute data folder → `/data`, read only; originals must exist for audio playback |
-| Logs | Shared data `logs/cem-master-backend/` → writable log mount; `LOG_LEVEL=debug/info/error` |
-| Database | Central PostgreSQL for cluster deployment; database/role provisioned by the DBA |
-| Downloads | Optional FileBrowser serves shared data; links require configured output shares |
-| Retention | Master `outputs.yaml`: projects **public** with no TTL; logs **private_persistent** with no TTL; scratch **delete** after 7 days |
+The API serves the master UI and catalogue on one port; the separate indexer
+reads public compute projects and writes PostgreSQL rollups. Both master services
+mount the shared data read-only, with a writable nested log directory. Original
+WAVs must remain available in that mount for recording playback.
 
-The host data service is external and is not started by Compose; `outputs.yaml`
-does not enforce itself. Compute currently has its own retention worker and
-still needs a cluster policy file. Optional Google Drive and Earth Engine
-integrations belong to compute, not the master request path.
+The diagram shows central PostgreSQL for cluster deployment; the local overlay
+supplies a development database. FileBrowser is optional. The external host data
+service must be provisioned separately: `outputs.yaml` declares policy but
+Compose does not enforce it. Master uses no model weights. Compute's execution
+branches, model-mount gap and optional Drive/GEE integrations are described in
+[its architecture](https://github.com/err400/cem-backend/blob/master/README.md#architecture).
 
 ## Directory Mounts & Volume Layout
 
