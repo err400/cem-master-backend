@@ -433,11 +433,12 @@ Compose inputs. Direct host Python processes instead use the application names
 | `COMPUTE_FRONTEND_PORT` | Compute UI host binding | `127.0.0.1:8080` for a host reverse proxy. |
 | `SERVER_BASE_URL` | API URL written into browser configuration | Required actual HTTPS compute API URL. Explicitly set it when port values include a bind address. |
 | `ALLOWED_ORIGINS` | Browser origins allowed to call compute API | `https://www.cse.iitd.ernet.in`; add other origins only if needed. No URL path. |
-| `DEBUG` | Compute debug logging | `false` in production. |
+| `LOG_LEVEL` | Compute application/API request logging | `info` normally; `debug` for detailed traces and browser diagnostics; `error` for failed requests/jobs only. |
+| `DEBUG` | Legacy compute debug override | `false` in production; `true` overrides `LOG_LEVEL`. |
 | `MAX_UPLOAD_MB` | Application upload-size limit | Default `2048`; choose for expected uploads and match proxy limits. |
 | `BIRDNET_MAX_WORKERS` | BirdNET parallel worker count | Start at `1` on limited RAM, otherwise `2`; each worker loads a model. |
 | `INDICES_MAX_WORKERS` | Acoustic-index worker count | Blank for automatic selection; use a small explicit count if RAM is limited. |
-| `HOST_LOG_DIR` | Host folder mounted at `/logs` | Defaults to `./logs`; choose an absolute writable persistent log path if needed. |
+| `HOST_LOG_DIR` | Host folder mounted at `/logs` | Defaults to `./data/logs/cem-backend`; choose an absolute writable persistent log path if needed. |
 | `LOG_DIR` | Compute log path inside container | Keep `/logs` to match its mount. |
 | `DATA_DIR` | Compute data path inside container | Keep `/data` to match the shared mount. |
 | `HOST_DATA_DIR` | Legacy fallback for the host data folder | Leave at default/unset; explicit `CEM_DATA_DIR_HOST` takes precedence. |

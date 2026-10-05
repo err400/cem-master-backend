@@ -37,7 +37,7 @@ flowchart TB
     CodeCompute["Compute host code mounts<br/>pipeline to /app/pipeline<br/>server/app to /app/app"]
     Models["Required compute models/ to /app/models<br/>not configured; master models N/A"]
     Data["Shared host data/projects/<br/>mounted at /data in compute and master<br/>WAVs, caches, outputs, snippets, job metadata"]
-    ComputeLogs["Current compute logs/ to /logs<br/>task logs under data/projects<br/>required data/logs/cem-backend"]
+    ComputeLogs["Compute data/logs/cem-backend to /logs<br/>LOG_LEVEL debug / info / error<br/>task logs under data/projects"]
     GEE["Optional Google Earth Engine<br/>compute stratification"]
     Drive["Optional Google OAuth and Drive<br/>compute frontend sync"]
     App["Master backend Docker<br/>FastAPI :8000 serves frontend and API<br/>reads recordings/snippets from /data"]
