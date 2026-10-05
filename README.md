@@ -1,4 +1,4 @@
-# CEM Master — Public Catalogue and API
+# CEM Master Backend
 
 Public catalogue API, static master website, PostgreSQL catalogue, and background
 indexer for Continuous Ecological Monitoring.
