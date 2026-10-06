@@ -15,12 +15,14 @@ Application and API logging supports three levels configured via the `LOG_LEVEL`
 ## Log Destinations
 
 Logs are emitted simultaneously to two destinations:
-1. **Standard Error / Stdout**: Streamed directly to `docker compose logs -f backend indexer`.
+1. **Standard Error / Stdout**: Streamed directly to the appropriate stack's `logs -f backend indexer` command.
 2. **Persistent Log File**: Written to `/data/logs/cem-master-backend/app.log`, mounted from the host (`data/logs/cem-master-backend/`).
 
 ## How to Enable Verbose Logging
 
-Set `LOG_LEVEL=debug` (or `DEBUG=true`) in `.env`, then recreate the containers:
+Set `LOG_LEVEL=debug` (or `DEBUG=true`) in `.env`, then recreate the containers.
+These commands are for local development; production must include its configured
+overlay from [CEM_SETUP_GUIDE.md](CEM_SETUP_GUIDE.md):
 
 ```sh
 docker compose -f compose.yaml -f compose.local.yaml up -d
@@ -29,7 +31,8 @@ docker compose -f compose.yaml -f compose.local.yaml logs -f backend indexer
 
 To tail the persistent log file directly:
 ```sh
-tail -f ../cem-backend/data/logs/cem-master-backend/app.log
+docker compose -f compose.yaml -f compose.local.yaml exec -T backend \
+  tail -f /data/logs/cem-master-backend/app.log
 ```
 
 ## Snippet Audio Debug Flow
@@ -40,3 +43,10 @@ If a 9-second clip player is absent on the UI:
 3. Check `species.serialize` output in API responses.
 
 
+
+## Raw recording playback
+
+Use browser DevTools Network to inspect the exact stream URL and status. It
+must retain `API_BASE_URL`'s proxy prefix. If the backend returns
+`Audio file not found`, compare the API and indexer `/data` mounts and locate
+the original WAV. See [publication troubleshooting](docs/first-time-local-publication.md).
